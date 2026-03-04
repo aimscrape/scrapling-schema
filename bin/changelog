@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  bin/changelog check [--file CHANGELOG.md]
+  bin/changelog release <X.Y.Z> --date YYYY-MM-DD [--file CHANGELOG.md] [--allow-empty]
+
+Commands:
+  check
+    Validates that the [Unreleased] section contains at least one notable entry.
+    This is meant to keep release notes detailed and non-empty.
+
+  release
+    Moves the current [Unreleased] section content into a new version section:
+      ## [X.Y.Z] - YYYY-MM-DD
+    Then resets [Unreleased] to an empty template (Added/Changed/Fixed/Removed).
+
+Notes:
+  - The changelog format follows "Keep a Changelog" + Semantic Versioning.
+  - By default, `release` refuses to create an empty release section.
+    Use --allow-empty for emergency releases (it will add "No notable changes.").
+
+Examples:
+  bin/changelog check
+  bin/changelog release 0.1.2 --date 2026-02-22
+  bin/changelog release 0.1.2 --date 2026-02-22 --allow-empty
+USAGE
+}
+
+python_bin() {
+  if [[ -x ".venv/bin/python" ]]; then
+    echo ".venv/bin/python"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    echo "python"
+    return 0
+  fi
+  echo "No python interpreter found (.venv/bin/python, python3, python)." >&2
+  exit 1
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 2
+fi
+
+MODE="$1"
+shift
+
+CHANGELOG_FILE="CHANGELOG.md"
+RELEASE_VERSION=""
+RELEASE_DATE=""
+ALLOW_EMPTY=0
+
+case "$MODE" in
+  check) ;;
+  release)
+    if [[ $# -lt 1 ]]; then
+      echo "release requires a version like X.Y.Z" >&2
+      usage
+      exit 2
+    fi
+    RELEASE_VERSION="$1"
+    shift
+    ;;
+  *)
+    echo "Unknown command: $MODE" >&2
+    usage
+    exit 2
+    ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file)
+      CHANGELOG_FILE="${2:-}"
+      shift
+      if [[ -z "$CHANGELOG_FILE" ]]; then
+        echo "--file requires a non-empty value" >&2
+        exit 2
+      fi
+      ;;
+    --date)
+      RELEASE_DATE="${2:-}"
+      shift
+      if [[ -z "$RELEASE_DATE" ]]; then
+        echo "--date requires a non-empty value" >&2
+        exit 2
+      fi
+      ;;
+    --allow-empty) ALLOW_EMPTY=1 ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+PY="$(python_bin)"
+
+export MODE
+export CHANGELOG_FILE
+export RELEASE_VERSION
+export RELEASE_DATE
+export ALLOW_EMPTY
+
+exec "$PY" - <<'PY'
+from __future__ import annotations
+
+import os
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class UnreleasedSection:
+    body_start: int
+    body_end: int
+    body: str
+
+
+def _die(message: str, code: int = 1) -> "NoReturn":
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def _load(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        _die(f"Changelog file not found: {path}", code=2)
+
+
+def _find_unreleased(text: str) -> UnreleasedSection:
+    # Match the header line only. Do not consume the blank line(s) after it.
+    header = re.search(r"(?m)^## \[Unreleased\][ \t]*\n", text)
+    if not header:
+        _die("Failed to find '## [Unreleased]' section in changelog.", code=2)
+
+    body_start = header.end()
+    next_release = re.search(r"(?m)^## \[\d+\.\d+\.\d+\]", text[body_start:])
+    body_end = body_start + next_release.start() if next_release else len(text)
+
+    return UnreleasedSection(
+        body_start=body_start,
+        body_end=body_end,
+        body=text[body_start:body_end],
+    )
+
+
+def _has_notable_content(body: str) -> bool:
+    # Notable if it contains at least one list item.
+    if re.search(r"(?m)^\s*(?:[-*+]\s+|\d+\.\s+)\S", body):
+        return True
+    # Or any non-empty, non-heading line.
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        return True
+    return False
+
+
+def _validate_version(version: str) -> None:
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version.strip()):
+        _die(f"Invalid version {version!r}. Expected X.Y.Z (e.g. 0.1.2).", code=2)
+
+
+def _validate_date(date_str: str) -> None:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str.strip()):
+        _die(f"Invalid date {date_str!r}. Expected YYYY-MM-DD (e.g. 2026-02-22).", code=2)
+
+
+def _release(
+    *,
+    changelog_path: Path,
+    version: str,
+    date_str: str,
+    allow_empty: bool,
+) -> None:
+    text = _load(changelog_path)
+    if re.search(rf"(?m)^## \[{re.escape(version)}\]", text):
+        _die(f"Version already exists in changelog: {version}", code=2)
+
+    unreleased = _find_unreleased(text)
+    body = unreleased.body.strip("\n")
+
+    if not _has_notable_content(body):
+        if not allow_empty:
+            _die(
+                "Unreleased section is empty.\\n"
+                "Add at least one entry under '## [Unreleased]' (or pass --allow-empty).",
+                code=1,
+            )
+        body = "- No notable changes."
+
+    unreleased_template = (
+        "\n"
+        "### Added\n\n"
+        "### Changed\n\n"
+        "### Fixed\n\n"
+        "### Removed\n\n"
+    )
+
+    release_section = f"## [{version}] - {date_str}\n\n{body}\n\n"
+
+    new_text = (
+        text[: unreleased.body_start]
+        + unreleased_template
+        + release_section
+        + text[unreleased.body_end :]
+    )
+    if not new_text.endswith("\n"):
+        new_text += "\n"
+
+    changelog_path.write_text(new_text, encoding="utf-8")
+
+
+def _check(*, changelog_path: Path) -> None:
+    text = _load(changelog_path)
+    unreleased = _find_unreleased(text)
+    if _has_notable_content(unreleased.body):
+        return
+    _die(
+        "Unreleased section is empty.\n"
+        "Add at least one entry under '## [Unreleased]'.",
+        code=1,
+    )
+
+
+def main() -> None:
+    mode = os.environ.get("MODE", "").strip()
+    changelog_file = os.environ.get("CHANGELOG_FILE", "CHANGELOG.md").strip()
+    version = os.environ.get("RELEASE_VERSION", "").strip()
+    date_str = os.environ.get("RELEASE_DATE", "").strip()
+    allow_empty = os.environ.get("ALLOW_EMPTY", "0").strip() == "1"
+
+    changelog_path = Path(changelog_file)
+
+    if mode == "check":
+        _check(changelog_path=changelog_path)
+        return
+
+    if mode == "release":
+        _validate_version(version)
+        if not date_str:
+            _die("--date is required for 'release' (e.g. --date 2026-02-22).", code=2)
+        _validate_date(date_str)
+        _release(
+            changelog_path=changelog_path,
+            version=version,
+            date_str=date_str,
+            allow_empty=allow_empty,
+        )
+        return
+
+    _die(f"Unknown mode: {mode!r}", code=2)
+
+
+if __name__ == "__main__":
+    main()
+PY

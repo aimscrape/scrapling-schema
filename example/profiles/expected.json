@@ -1,0 +1,20 @@
+{
+  "profiles": [
+    {
+      "name": "Bob",
+      "age": 32,
+      "skills": [
+        "python",
+        "html",
+        "yaml"
+      ],
+      "url": "/u/bob"
+    },
+    {
+      "name": "Carol",
+      "age": 0,
+      "skills": [],
+      "url": "/u/carol"
+    }
+  ]
+}

@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  bin/version <patch|minor|major> [-m "<commit message template>"] [--no-commit] [--no-tag] [--tag-prefix v] [--allow-dirty] [--dry-run]
+  bin/version --current
+
+Examples:
+  # Bump version, commit, and tag (default)
+  bin/version patch
+
+  # Customize commit message (replaces %s with tag, e.g. v0.1.1)
+  bin/version patch -m "chore(release): %s"
+
+  # Bump version only (no git commit/tag)
+  bin/version minor --no-commit --no-tag
+
+  # Show current version
+  bin/version --current
+
+Behavior:
+  - Reads [project].version from pyproject.toml (must be X.Y.Z)
+  - Increments patch/minor/major
+  - Writes the updated version back to pyproject.toml (unless --dry-run)
+  - Prints the new version to stdout
+  - By default also:
+    - `git add pyproject.toml`
+    - `git commit -m "<message>"`
+    - `git tag -a vX.Y.Z -m vX.Y.Z`
+
+Commit message template:
+  - Default: `chore(release): %s`
+  - If the message contains `%s`, it will be replaced with the tag (e.g. v0.1.1).
+USAGE
+}
+
+python_bin() {
+  if [[ -x ".venv/bin/python" ]]; then
+    echo ".venv/bin/python"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    echo "python"
+    return 0
+  fi
+  echo "No python interpreter found (.venv/bin/python, python3, python)." >&2
+  exit 1
+}
+
+PY="$(python_bin)"
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "${1:-}" == "--current" ]]; then
+  exec "$PY" - <<'PY'
+from __future__ import annotations
+
+from pathlib import Path
+import re
+
+text = Path("pyproject.toml").read_text(encoding="utf-8")
+in_project = False
+current: str | None = None
+
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_project = stripped == "[project]"
+        continue
+    if not in_project:
+        continue
+    m = re.match(r"^version\s*=\s*['\"]([^'\"]+)['\"]\s*(?:#.*)?$", stripped)
+    if m:
+        current = m.group(1)
+        break
+
+if current is None:
+    raise SystemExit("Failed to find [project].version in pyproject.toml.")
+
+print(current)
+PY
+fi
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 2
+fi
+
+KIND="$1"
+shift
+
+DRY_RUN=0
+DO_COMMIT=1
+DO_TAG=1
+ALLOW_DIRTY=0
+TAG_PREFIX="v"
+MESSAGE_TEMPLATE="chore(release): %s"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --no-commit) DO_COMMIT=0 ;;
+    --no-tag) DO_TAG=0 ;;
+    --allow-dirty) ALLOW_DIRTY=1 ;;
+    --tag-prefix)
+      TAG_PREFIX="${2:-}"
+      shift
+      if [[ -z "$TAG_PREFIX" ]]; then
+        echo "--tag-prefix requires a non-empty value" >&2
+        exit 2
+      fi
+      ;;
+    -m|--message)
+      MESSAGE_TEMPLATE="${2:-}"
+      shift
+      if [[ -z "$MESSAGE_TEMPLATE" ]]; then
+        echo "-m/--message requires a non-empty value" >&2
+        exit 2
+      fi
+      ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+case "$KIND" in
+  patch|minor|major) ;;
+  *)
+    echo "Unknown bump kind: $KIND (expected patch|minor|major)" >&2
+    exit 2
+    ;;
+esac
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  exec env BUMP_KIND="$KIND" "$PY" - <<'PY'
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+bump_kind = os.environ["BUMP_KIND"]
+
+text = Path("pyproject.toml").read_text(encoding="utf-8")
+in_project = False
+current: str | None = None
+
+for line in text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_project = stripped == "[project]"
+        continue
+    if not in_project:
+        continue
+    m2 = re.match(r"^version\s*=\s*['\"]([^'\"]+)['\"]\s*(?:#.*)?$", stripped)
+    if m2:
+        current = m2.group(1)
+        break
+
+if current is None:
+    raise SystemExit("Failed to find [project].version in pyproject.toml.")
+
+m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(current).strip())
+if not m:
+    raise SystemExit(f"Unsupported version format {current!r}. Expected 'X.Y.Z' (e.g. 0.1.0).")
+
+major, minor, patch = map(int, m.groups())
+if bump_kind == "patch":
+    patch += 1
+elif bump_kind == "minor":
+    minor += 1
+    patch = 0
+elif bump_kind == "major":
+    major += 1
+    minor = 0
+    patch = 0
+else:
+    raise SystemExit(f"Unknown bump kind: {bump_kind!r}")
+
+print(f"{major}.{minor}.{patch}")
+PY
+fi
+
+if ([[ $DO_COMMIT -eq 1 ]] || [[ $DO_TAG -eq 1 ]]) && [[ $ALLOW_DIRTY -ne 1 ]]; then
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Not inside a git repository." >&2
+    exit 1
+  fi
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Working tree is not clean. Commit/stash first (or pass --allow-dirty)." >&2
+    git status --porcelain >&2
+    exit 1
+  fi
+fi
+
+NEW_VERSION="$(env BUMP_KIND="$KIND" "$PY" - <<'PY'
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+bump_kind = os.environ["BUMP_KIND"]
+
+pyproject_path = Path("pyproject.toml")
+pyproject_text = pyproject_path.read_text(encoding="utf-8")
+in_project = False
+current: str | None = None
+
+for line in pyproject_text.splitlines():
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_project = stripped == "[project]"
+        continue
+    if not in_project:
+        continue
+    m2 = re.match(r"^version\s*=\s*['\"]([^'\"]+)['\"]\s*(?:#.*)?$", stripped)
+    if m2:
+        current = m2.group(1)
+        break
+
+if current is None:
+    raise SystemExit("Failed to find [project].version in pyproject.toml.")
+m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", str(current).strip())
+if not m:
+    raise SystemExit(f"Unsupported version format {current!r}. Expected 'X.Y.Z' (e.g. 0.1.0).")
+
+major, minor, patch = map(int, m.groups())
+if bump_kind == "patch":
+    patch += 1
+elif bump_kind == "minor":
+    minor += 1
+    patch = 0
+elif bump_kind == "major":
+    major += 1
+    minor = 0
+    patch = 0
+else:
+    raise SystemExit(f"Unknown bump kind: {bump_kind!r}")
+
+new_version = f"{major}.{minor}.{patch}"
+
+lines = pyproject_text.splitlines(True)
+in_project = False
+updated = False
+out: list[str] = []
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        in_project = stripped == "[project]"
+    if in_project and re.match(r"^version\s*=", stripped):
+        indent = line.split("version", 1)[0]
+        line = f'{indent}version = "{new_version}"\n'
+        updated = True
+    out.append(line)
+
+if not updated:
+    raise SystemExit("Failed to update version line in [project] section.")
+
+pyproject_path.write_text("".join(out), encoding="utf-8")
+print(new_version)
+PY
+)"
+
+TAG="${TAG_PREFIX}${NEW_VERSION}"
+
+if [[ $DO_TAG -eq 1 ]]; then
+  if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+    echo "Tag already exists: ${TAG}" >&2
+    exit 1
+  fi
+fi
+
+if [[ $DO_COMMIT -eq 1 ]]; then
+  git add pyproject.toml
+  COMMIT_MSG="${MESSAGE_TEMPLATE//%s/${TAG}}"
+  git commit -m "${COMMIT_MSG}"
+fi
+
+if [[ $DO_TAG -eq 1 ]]; then
+  git tag -a "${TAG}" -m "${TAG}"
+fi
+
+echo "${NEW_VERSION}"

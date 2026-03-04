@@ -1,0 +1,31 @@
+options:
+  clear:
+    remove_tags: ["script", "style"]
+
+fields:
+  products:
+    css: ".product"
+    list: true
+    fields:
+      sku:
+        css: "SELF"
+        attr: "data-sku"
+      name:
+        css: ".name"
+        text: true
+        transform: ["strip"]
+      url:
+        css: "a.link"
+        attr: "href"
+      price:
+        css: ".price"
+        text: true
+        transform:
+          - regex_sub: { pattern: "[^0-9.]+", repl: "" }
+          - to_float
+      tags:
+        css: ".tags li"
+        list: true
+        text: true
+        transform: ["strip"]
+

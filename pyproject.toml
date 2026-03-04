@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scrapling-schema"
+version = "0.1.0"
+description = "schema-driven HTML extractor "
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "scrapling>=0.4",
+  "PyYAML>=6.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/aimscrape/scrapling-schema"
+Issues = "https://github.com/aimscrape/scrapling-schema/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+scrapling-schema = "scrapling_schema.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+  # lxml emits this DeprecationWarning internally; it doesn't affect our behavior.
+  "ignore:.*strip_cdata.*HTMLParser\\(\\).*:DeprecationWarning:lxml\\.html.*",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

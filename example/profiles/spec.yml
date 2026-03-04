@@ -1,0 +1,21 @@
+fields:
+  profiles:
+    css: ".profile"
+    list: true
+    fields:
+      name:
+        css: "h2"
+        text: true
+        transform: ["strip"]
+      age:
+        css: ".age"
+        text: true
+        transform: ["strip", "to_int", { default: 0 }]
+      skills:
+        css: ".skills"
+        list: true
+        text: true
+        transform: [{ default: [] }, { split: "," }, "strip"]
+      url:
+        css: "a"
+        attr: "href"

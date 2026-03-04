@@ -1,0 +1,13 @@
+{
+  "title": "Hello World",
+  "author": "Alice",
+  "published_at": "2026-02-20",
+  "paragraphs": [
+    "First line.",
+    "Second line."
+  ],
+  "keywords": [
+    "python",
+    "scraping"
+  ]
+}

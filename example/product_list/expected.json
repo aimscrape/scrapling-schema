@@ -1,0 +1,23 @@
+{
+  "products": [
+    {
+      "sku": "A1",
+      "name": "Apple",
+      "url": "/p/a1",
+      "price": 12.5,
+      "tags": [
+        "fruit",
+        "fresh"
+      ]
+    },
+    {
+      "sku": "B2",
+      "name": "Banana",
+      "url": "/p/b2",
+      "price": 3.0,
+      "tags": [
+        "fruit"
+      ]
+    }
+  ]
+}

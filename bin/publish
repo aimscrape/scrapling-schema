@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  bin/publish <patch|minor|major> [-m "<commit message template>"] [--push] [--test] [--release] [--no-tests] [--no-build] [--no-changelog] [--allow-empty-changelog] [--yes] [--dry-run]
+
+Examples:
+  # Bump patch version, run tests+build, commit, tag
+  bin/publish patch
+
+  # Customize commit message (replaces %s with tag, e.g. v0.1.1)
+  bin/publish patch -m "chore(release): %s"
+
+  # Same, then push to origin
+  bin/publish patch --push
+
+  # Same, then push and create GitHub Release (requires gh CLI login)
+  bin/publish patch --push --release
+
+  # Push + upload to TestPyPI via GitHub Actions (requires gh CLI login)
+  bin/publish patch --push --test
+
+  # Gate a PyPI release behind a TestPyPI upload (requires gh CLI login)
+  bin/publish patch --push --test --release
+
+  # Skip CHANGELOG.md automation (not recommended)
+  bin/publish patch --no-changelog
+
+Notes:
+  - Publishing to PyPI is done by GitHub Actions on GitHub Release (published) using OIDC (Trusted Publishing).
+  - The publish workflow enforces: tag must be exactly v{version} from pyproject.toml.
+  - --test triggers a workflow_dispatch run that uploads to TestPyPI for the created tag.
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 2
+fi
+
+KIND="$1"
+shift
+
+PUSH=0
+RUN_TESTPYPI=0
+CREATE_RELEASE=0
+RUN_TESTS=1
+RUN_BUILD=1
+DO_CHANGELOG=1
+ALLOW_EMPTY_CHANGELOG=0
+YES=0
+DRY_RUN=0
+MESSAGE_TEMPLATE="chore(release): %s"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -m|--message)
+      MESSAGE_TEMPLATE="${2:-}"
+      shift
+      if [[ -z "$MESSAGE_TEMPLATE" ]]; then
+        echo "-m/--message requires a non-empty value" >&2
+        exit 2
+      fi
+      ;;
+    --push) PUSH=1 ;;
+    --test) RUN_TESTPYPI=1 ;;
+    --release) CREATE_RELEASE=1 ;;
+    --no-tests) RUN_TESTS=0 ;;
+    --no-build) RUN_BUILD=0 ;;
+    --no-changelog) DO_CHANGELOG=0 ;;
+    --allow-empty-changelog) ALLOW_EMPTY_CHANGELOG=1 ;;
+    --yes) YES=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+run() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '+ %q ' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+python_bin() {
+  if [[ -x ".venv/bin/python" ]]; then
+    echo ".venv/bin/python"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    echo "python"
+    return 0
+  fi
+  echo "No python interpreter found (.venv/bin/python, python3, python)." >&2
+  exit 1
+}
+
+PY="$(python_bin)"
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Not inside a git repository." >&2
+  exit 1
+fi
+
+BRANCH="$(git branch --show-current)"
+if [[ "$BRANCH" != "main" ]]; then
+  echo "Refusing to publish from branch: $BRANCH (expected main)" >&2
+  echo "Tip: git switch main" >&2
+  exit 1
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Working tree is not clean. Commit/stash your changes first." >&2
+  git status --porcelain >&2
+  exit 1
+fi
+
+if [[ $DO_CHANGELOG -eq 1 ]]; then
+  if ! bash bin/changelog check; then
+    if [[ $ALLOW_EMPTY_CHANGELOG -ne 1 ]]; then
+      echo "" >&2
+      echo "Refusing to publish with an empty Unreleased section in CHANGELOG.md." >&2
+      echo "Add release notes under '## [Unreleased]' or pass --allow-empty-changelog." >&2
+      exit 1
+    fi
+    echo "Warning: Unreleased section is empty; continuing due to --allow-empty-changelog." >&2
+  fi
+fi
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  NEW_VERSION="$(bash bin/version "$KIND" --dry-run)"
+else
+  NEW_VERSION="$(bash bin/version "$KIND" --no-commit --no-tag)"
+fi
+
+TAG="v${NEW_VERSION}"
+
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+  echo "Tag already exists: ${TAG}" >&2
+  exit 1
+fi
+
+if [[ $DO_CHANGELOG -eq 1 ]]; then
+  # Freeze the Unreleased notes into the new version section.
+  DATE="$(date +%F)"
+  if [[ $ALLOW_EMPTY_CHANGELOG -eq 1 ]]; then
+    run bash bin/changelog release "${NEW_VERSION}" --date "${DATE}" --allow-empty
+  else
+    run bash bin/changelog release "${NEW_VERSION}" --date "${DATE}"
+  fi
+fi
+
+if [[ $RUN_TESTS -eq 1 ]]; then
+  run "$PY" -m pytest -q
+fi
+
+if [[ $RUN_BUILD -eq 1 ]]; then
+  run "$PY" -m pip install -U build >/dev/null
+  run "$PY" -m build
+fi
+
+if [[ $DO_CHANGELOG -eq 1 ]]; then
+  run git add CHANGELOG.md
+fi
+run git add pyproject.toml
+COMMIT_MSG="${MESSAGE_TEMPLATE//%s/${TAG}}"
+run git commit -m "${COMMIT_MSG}"
+run git tag -a "${TAG}" -m "${TAG}"
+
+if [[ $RUN_TESTPYPI -eq 1 ]]; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "--test cannot be used with --dry-run." >&2
+    exit 2
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "gh CLI not found; cannot trigger TestPyPI upload automatically." >&2
+    echo "Install gh or run the workflow_dispatch in the GitHub UI for tag ${TAG}." >&2
+    exit 1
+  fi
+  if [[ $PUSH -ne 1 ]]; then
+    echo "--test requires --push so the tag exists on GitHub." >&2
+    exit 1
+  fi
+fi
+
+if [[ $PUSH -eq 1 ]]; then
+  if [[ $YES -ne 1 ]]; then
+    echo "About to push commit and tag to origin (main + ${TAG})."
+    read -r -p "Continue? [y/N] " ans
+    if [[ "${ans}" != "y" && "${ans}" != "Y" ]]; then
+      echo "Aborted."
+      exit 1
+    fi
+  fi
+  run git push origin main
+  run git push origin "${TAG}"
+fi
+
+if [[ $RUN_TESTPYPI -eq 1 ]]; then
+  SHA="$(git rev-list -n 1 "${TAG}")"
+  run gh workflow run .github/workflows/publish.yml -r "${TAG}" -f repository=testpypi
+
+  RUN_ID=""
+  for _ in $(seq 1 30); do
+    RUN_ID="$(gh run list --workflow .github/workflows/publish.yml --limit 30 \
+      --json databaseId,headBranch,headSha,event,status,conclusion,createdAt \
+      --jq "map(select(.event==\"workflow_dispatch\" and .headBranch==\"${TAG}\" and .headSha==\"${SHA}\")) | sort_by(.createdAt) | last | .databaseId")"
+    if [[ -n "${RUN_ID}" && "${RUN_ID}" != "null" ]]; then
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ -z "${RUN_ID}" || "${RUN_ID}" == "null" ]]; then
+    echo "Failed to find the workflow run for TestPyPI upload. Check GitHub Actions." >&2
+    exit 1
+  fi
+
+  # Block until it finishes; fail fast if it fails.
+  run gh run watch "${RUN_ID}" --exit-status
+fi
+
+if [[ $CREATE_RELEASE -eq 1 ]]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "gh CLI not found; cannot create GitHub Release automatically." >&2
+    echo "Install gh or create the Release in the GitHub UI for tag ${TAG}." >&2
+    exit 1
+  fi
+  if [[ $PUSH -ne 1 ]]; then
+    echo "--release requires --push so the tag exists on GitHub." >&2
+    exit 1
+  fi
+  run gh release create "${TAG}" --generate-notes
+fi
+
+echo "Done."
+echo "Version: ${NEW_VERSION}"
+echo "Tag: ${TAG}"
+
+echo "Next steps:"
+if [[ $PUSH -eq 0 ]]; then
+  echo "  - Push commit + tag:"
+  echo "      git push origin main"
+  echo "      git push origin ${TAG}"
+fi
+
+if [[ $RUN_TESTPYPI -eq 0 ]]; then
+  echo "  - (Optional) Upload to TestPyPI via GitHub Actions:"
+  echo "      gh workflow run .github/workflows/publish.yml -r ${TAG} -f repository=testpypi"
+fi
+
+if [[ $CREATE_RELEASE -eq 0 ]]; then
+  echo "  - Publish to PyPI (recommended): create a GitHub Release (this triggers the publish workflow):"
+  echo "      gh release create ${TAG} --generate-notes"
+  echo "  - Publish to PyPI (alternative): run the publish workflow manually for this tag:"
+  echo "      gh workflow run .github/workflows/publish.yml -r ${TAG} -f repository=pypi"
+fi
