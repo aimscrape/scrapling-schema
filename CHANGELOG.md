@@ -2,6 +2,16 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [1.1.0] - 2026-03-05
+
+### Added
+
 - `attr: "innerHTML"` for HTML content extraction (replaces the legacy `html: true` flag).
 
 ### Changed
