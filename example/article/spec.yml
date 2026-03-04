@@ -5,29 +5,23 @@ options:
 fields:
   title:
     css: "article h1"
-    text: true
-    transform: ["strip"]
+    type: "string"
 
   author:
     css: "article .author"
-    text: true
+    type: "string"
     transform:
       - regex_sub: { pattern: "^By\\s+", repl: "" }
-      - strip
 
   published_at:
     css: "article time"
+    type: "string"
     attr: "datetime"
 
   paragraphs:
     css: "article .content p"
-    list: true
-    text: true
-    transform: ["strip"]
+    type: "array<string>"
 
   keywords:
     css: "article .keywords li"
-    list: true
-    text: true
-    transform: ["strip"]
-
+    type: "array<string>"

@@ -1,21 +1,20 @@
 fields:
   profiles:
     css: ".profile"
-    list: true
+    type: "array<object>"
     fields:
       name:
         css: "h2"
-        text: true
-        transform: ["strip"]
+        type: "string"
       age:
         css: ".age"
-        text: true
-        transform: ["strip", "to_int", { default: 0 }]
+        type: "integer"
+        defaultValue: 0
       skills:
         css: ".skills"
-        list: true
-        text: true
-        transform: [{ default: [] }, { split: "," }, "strip"]
+        type: "array<string>"
+        transform: [{ split: "," }]
       url:
         css: "a"
+        type: "string"
         attr: "href"

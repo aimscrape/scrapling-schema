@@ -26,16 +26,15 @@ spec = Schema(
     fields={
         "products": Field(
             css=".product",
-            list=True,
+            type="array<object>",
             fields={
-                "sku":   Field(css="SELF", attr="data-sku"),
-                "name":  Field(css=".name", text=True, transform=["strip"]),
-                "url":   Field(css="a.link", attr="href"),
-                "price": Field(css=".price", text=True, transform=[
+                "sku":   Field(css="SELF", type="string", attr="data-sku"),
+                "name":  Field(css=".name", type="string"),
+                "url":   Field(css="a.link", type="string", attr="href"),
+                "price": Field(css=".price", type="number", transform=[
                     RegexSub(pattern=r"[^0-9.]+"),
-                    "to_float",
                 ]),
-                "tags":  Field(css=".tags li", list=True, text=True, transform=["strip"]),
+                "tags":  Field(css=".tags li", type="array<string>"),
             },
         )
     },
@@ -55,21 +54,20 @@ options:
 fields:
   products:
     css: ".product"
-    list: true
+    type: "array<object>"
     fields:
       sku:
         css: "SELF"
+        type: "string"
         attr: "data-sku"
       name:
         css: ".name"
-        text: true
-        transform: ["strip"]
+        type: "string"
       price:
         css: ".price"
-        text: true
+        type: "number"
         transform:
           - regex_sub: { pattern: "[^0-9.]+", repl: "" }
-          - to_float
 ```
 
 ```python
@@ -90,24 +88,28 @@ scrapling-schema --spec spec.yml --schema
 | param       | type   | description                                                  |
 | ----------- | ------ | ------------------------------------------------------------ |
 | `css`       | `str`  | CSS selector. Use `"SELF"` to select the context node itself |
-| `text`      | `bool` | Extract text content                                         |
-| `attr`      | `str`  | Extract an attribute value                                   |
-| `html`      | `bool` | Extract outer HTML                                           |
-| `list`      | `bool` | Return a list of matched nodes                               |
-| `fields`    | `dict` | Nested fields (object or list of objects)                    |
+| `attr`      | `str`  | Extract an attribute value (or special `"innerHTML"`)        |
+| `type`      | `str`  | Output type: `"string"|"integer"|"number"|"boolean"|"object"|"array<string>"|"array<integer>"|"array<number>"|"array<boolean>"|"array<object>"` |
+| `nullable`  | `bool` | If `false`, missing values raise `ValidationError`           |
+| `defaultValue` | `any` | Fallback value used when the extracted value is empty        |
+| `fields`    | `dict` | Nested fields (for `object` / `array<object>`)               |
 | `transform` | `list` | Transform pipeline (see below)                               |
 | `required`  | `bool` | Raise `ValidationError` if value is empty                    |
+
+Notes:
+- `type` is required for every field.
+- Arrays must use `type: "array<...>"` (no `items:` and no `list:`).
 
 ## Transform reference
 
 | transform                 | shorthand | description                                   |
 | ------------------------- | --------- | --------------------------------------------- |
-| `"strip"`                 | ✓         | Strip whitespace                              |
-| `"to_int"`                | ✓         | Convert to integer                            |
-| `"to_float"`              | ✓         | Convert to float                              |
 | `RegexSub(pattern, repl)` | —         | Regex substitution                            |
-| `Split(delimiter)`        | —         | Split string into list (requires `list=True`) |
-| `Default(value)`          | —         | Fallback value when result is empty           |
+| `Split(delimiter)`        | —         | Split string into array items (requires `type:"array<...>"`) |
+
+Notes:
+- String outputs are stripped automatically (no transform needed).
+- Use field-level `defaultValue` for fallbacks (defaults are not supported inside transforms).
 
 ## Testing
 

@@ -10,15 +10,14 @@ from .core import (
 )
 from .types import (
     Clear,
-    Default,
-    Defaults,
     Field,
+    FieldType,
     Options,
     RegexSub,
+    ScalarType,
+    ArrayType,
     Schema,
     Split,
-    ToFloat,
-    ToInt,
     TransformStep,
 )
 
@@ -34,13 +33,12 @@ __all__ = [
     # types
     "Schema",
     "Field",
+    "FieldType",
+    "ScalarType",
+    "ArrayType",
     "Options",
     "Clear",
-    "Defaults",
     "RegexSub",
     "Split",
-    "ToInt",
-    "ToFloat",
-    "Default",
     "TransformStep",
 ]

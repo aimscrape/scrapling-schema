@@ -8,8 +8,8 @@ Instead of writing raw YAML/dicts, define your spec with full IDE type hints:
     spec = Schema(
         options=Options(clear=Clear(remove_tags=["script", "style"])),
         fields={
-            "price": Field(css=".price", text=True, transform=["strip", RegexSub(pattern=r"[^0-9.]+"), "to_float"]),
-            "tags":  Field(css=".tags li", list=True, text=True, transform=["strip"]),
+            "price": Field(css=".price", type="number", transform=[RegexSub(pattern=r"[^0-9.]+")]),
+            "tags":  Field(css=".tags li", type="array<string>"),
         }
     )
 
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 # ---------------------------------------------------------------------------
@@ -43,35 +43,14 @@ class Split:
         return {"split": self.delimiter}
 
 
-@dataclass
-class ToInt:
-    def to_dict(self) -> dict[str, Any]:
-        return {"to_int": True}
-
-
-@dataclass
-class ToFloat:
-    def to_dict(self) -> dict[str, Any]:
-        return {"to_float": True}
-
-
-@dataclass
-class Default:
-    value: Any
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"default": self.value}
-
-
-# A transform step is either a shorthand string or one of the above objects.
-# Shorthand strings: "strip", "to_int", "to_float"
-TransformStep = str | RegexSub | Split | ToInt | ToFloat | Default | Callable
+# A transform step is either a shorthand string or one of the below objects.
+TransformStep = str | RegexSub | Split | Callable
 
 
 def _serialize_transform(steps: list[TransformStep]) -> list[Any]:
     out: list[Any] = []
     for step in steps:
-        if callable(step) and not isinstance(step, (str, RegexSub, Split, ToInt, ToFloat, Default)):
+        if callable(step) and not isinstance(step, (str, RegexSub, Split)):
             out.append({"__callable__": step})
         elif isinstance(step, str):
             out.append(step)
@@ -93,24 +72,13 @@ class Clear:
 
 
 @dataclass
-class Defaults:
-    text_transform: list[TransformStep] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"text_transform": _serialize_transform(self.text_transform)}
-
-
-@dataclass
 class Options:
     clear: Clear | None = None
-    defaults: Defaults | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.clear:
             out["clear"] = self.clear.to_dict()
-        if self.defaults:
-            out["defaults"] = self.defaults.to_dict()
         return out
 
 
@@ -118,15 +86,27 @@ class Options:
 # Field
 # ---------------------------------------------------------------------------
 
+ScalarType = Literal["string", "integer", "number", "boolean"]
+ArrayType = Literal[
+    "array<string>",
+    "array<integer>",
+    "array<number>",
+    "array<boolean>",
+    "array<object>",
+]
+FieldType = ScalarType | Literal["object"] | ArrayType
+
+
 @dataclass
 class Field:
-    css: str
-    # extraction mode — at most one should be set
-    text: bool = False
+    css: str | None
+    # output type (required)
+    type: FieldType
+    nullable: bool | None = None
+    defaultValue: Any | None = None
+    # extraction mode
     attr: str | None = None
-    html: bool = False
-    # list / nested
-    list: bool = False
+    # nested
     fields: dict[str, "Field"] | None = None
     # transforms
     transform: list[TransformStep] | None = None
@@ -134,15 +114,16 @@ class Field:
     required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"css": self.css}
-        if self.text:
-            out["text"] = True
+        out: dict[str, Any] = {}
+        if self.css is not None:
+            out["css"] = self.css
+        out["type"] = self.type
+        if self.nullable is not None:
+            out["nullable"] = bool(self.nullable)
+        if self.defaultValue is not None:
+            out["defaultValue"] = self.defaultValue
         if self.attr is not None:
             out["attr"] = self.attr
-        if self.html:
-            out["html"] = True
-        if self.list:
-            out["list"] = True
         if self.fields is not None:
             out["fields"] = {k: v.to_dict() for k, v in self.fields.items()}
         if self.transform is not None:

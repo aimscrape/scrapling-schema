@@ -18,12 +18,13 @@ class ValidationError(ValueError):
 
 
 _MISSING = object()
+_SCALAR_TYPES = {"string", "integer", "number", "boolean"}
+_BASE_TYPES = set(_SCALAR_TYPES) | {"array", "object"}
 
 
 @dataclass(frozen=True)
 class _Options:
     remove_tags: tuple[str, ...] = ()
-    default_text_transform: tuple[Any, ...] = ()
 
 
 def extract_from_yaml(html: str, yaml_spec: str) -> Any:
@@ -101,19 +102,8 @@ def _parse_options(options: Any) -> _Options:
     if not isinstance(options, Mapping):
         raise ExtractError("'options' must be a mapping when provided.")
 
-    defaults = options.get("defaults", {})
-    if defaults in (None, {}):
-        defaults = {}
-    if not isinstance(defaults, Mapping):
-        raise ExtractError("'options.defaults' must be a mapping when provided.")
-
-    default_text_transform = defaults.get("text_transform", [])
-    if default_text_transform is None:
-        default_text_transform = []
-    if not isinstance(default_text_transform, list):
-        raise ExtractError("'options.defaults.text_transform' must be a list when provided.")
-    if _has_split_transform(default_text_transform):
-        raise ExtractError("'options.defaults.text_transform' cannot include split; use a list:true field transform instead.")
+    if "defaults" in options:
+        raise ExtractError("'options.defaults' is not supported. Remove defaults/text_transform; string outputs are stripped automatically.")
 
     clear = options.get("clear", {})
     if clear in (None, {}):
@@ -126,10 +116,7 @@ def _parse_options(options: Any) -> _Options:
         remove_tags = []
     if not isinstance(remove_tags, list) or not all(isinstance(t, str) for t in remove_tags):
         raise ExtractError("'options.clear.remove_tags' must be a list of strings.")
-    return _Options(
-        remove_tags=tuple(remove_tags),
-        default_text_transform=tuple(default_text_transform),
-    )
+    return _Options(remove_tags=tuple(remove_tags))
 
 
 @lru_cache(maxsize=256)
@@ -167,16 +154,52 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
     if not isinstance(field_spec, Mapping):
         raise ExtractError(f"{path} must be a mapping.")
 
+    if "items" in field_spec:
+        raise ExtractError(f"{path}.items is not supported; use type:'array<...>' (e.g. array<string>, array<object>).")
+    if "list" in field_spec:
+        raise ExtractError(f"{path}.list is not supported; use type:'array<...>' (e.g. array<string>, array<object>).")
+    if "text" in field_spec:
+        raise ExtractError(f"{path}.text is not supported; text is the default scalar mode.")
+    if "html" in field_spec:
+        raise ExtractError(f"{path}.html is not supported; use attr:'innerHTML' instead.")
+
+    declared_type, array_items_type = _parse_field_type(field_spec.get("type", _MISSING), path=path)
+    if declared_type is None:
+        raise ExtractError(f"{path}.type is required.")
+    nullable = _parse_nullable(field_spec.get("nullable", _MISSING), path=path)
+    default_value = field_spec.get("defaultValue", _MISSING)
+
     required = field_spec.get("required", False)
     if "required" in field_spec and not isinstance(required, bool):
         raise ExtractError(f"{path}.required must be a boolean when provided.")
+    if nullable is True and bool(required):
+        raise ExtractError(f"{path}: nullable:true cannot be combined with required:true.")
 
-    is_list = bool(field_spec.get("list", False))
+    is_list = declared_type == "array"
+
     has_fields = "fields" in field_spec
+    if declared_type == "array" and array_items_type is None:
+        raise ExtractError(
+            f"{path}.type must include an element type, e.g. array<string>, array<integer>, array<number>, array<boolean>, array<object>."
+        )
+    if declared_type == "array" and array_items_type == "object" and not has_fields:
+        raise ExtractError(f"{path}.fields is required for type:'array<object>'.")
+    if declared_type == "array" and array_items_type in _SCALAR_TYPES and has_fields:
+        raise ExtractError(f"{path}.fields is only allowed for type:'array<object>'.")
+
+    if declared_type == "object" and not has_fields:
+        raise ExtractError(f"{path}.type is 'object' so {path}.fields is required.")
+    if declared_type in ("string", "integer", "number", "boolean") and has_fields:
+        raise ExtractError(f"{path}.fields is not allowed when {path}.type is {declared_type!r}.")
+    if declared_type == "object" and default_value is not _MISSING and not isinstance(default_value, Mapping):
+        raise ExtractError(f"{path}.defaultValue must be a mapping for type:'object'.")
+    if declared_type == "array" and array_items_type == "object" and default_value is not _MISSING and not isinstance(default_value, list):
+        raise ExtractError(f"{path}.defaultValue must be a list for type:'array<object>'.")
 
     css = field_spec.get("css")
     if css is None and context is None:
         value = [] if is_list else None
+        value = _enforce_nullable(value, nullable=nullable, path=path)
         return _enforce_required(value, bool(required), path=path)
 
     if has_fields:
@@ -186,45 +209,60 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
 
         if is_list:
             if not isinstance(css, str) or not css:
-                raise ExtractError(f"{path}.css must be a non-empty string when list:true and fields is present.")
+                raise ExtractError(f"{path}.css must be a non-empty string for type:'array<object>'.")
             nodes = _css(context, css)
             value = [_eval_fields(node, fields, options=options) for node in nodes]
+            if value == [] and isinstance(default_value, list):
+                value = list(default_value)
+            value = _enforce_nullable(value, nullable=nullable, path=path)
             return _enforce_required(value, bool(required), path=path)
 
         if css is None:
             value = _eval_fields(context, fields, options=options)
+            if value is None and default_value is not _MISSING:
+                value = default_value
+            value = _enforce_nullable(value, nullable=nullable, path=path)
             return _enforce_required(value, bool(required), path=path)
 
         if not isinstance(css, str) or not css:
             raise ExtractError(f"{path}.css must be a non-empty string when provided.")
         nodes = _css(context, css)
         if not nodes:
-            return _enforce_required(None, bool(required), path=path)
+            value = _enforce_nullable(None, nullable=nullable, path=path)
+            if value is None and default_value is not _MISSING:
+                value = default_value
+            return _enforce_required(value, bool(required), path=path)
         value = _eval_fields(nodes[0], fields, options=options)
+        if value is None and default_value is not _MISSING:
+            value = default_value
+        value = _enforce_nullable(value, nullable=nullable, path=path)
         return _enforce_required(value, bool(required), path=path)
 
     # Scalar extraction
     if not isinstance(css, str) or not css:
         raise ExtractError(f"{path}.css is required for scalar fields.")
 
+    if declared_type == "object":
+        raise ExtractError(f"{path}.type is 'object' but no {path}.fields mapping was provided.")
+
     nodes = _css(context, css)
     extractor = _build_scalar_extractor(field_spec, path=path)
-    mode = _scalar_mode(field_spec, path=path)
+    is_inner_html = isinstance(field_spec.get("attr"), str) and field_spec.get("attr") == "innerHTML"
+    should_strip_strings = not is_inner_html
 
     has_transform_key = "transform" in field_spec
     if has_transform_key:
         transforms = field_spec.get("transform", [])
         transforms_path = f"{path}.transform"
     else:
-        if mode == "text" and options.default_text_transform:
-            transforms = options.default_text_transform
-            transforms_path = f"options.defaults.text_transform (for {path})"
-        else:
-            transforms = []
-            transforms_path = f"{path}.transform"
+        transforms = []
+        transforms_path = f"{path}.transform"
 
     if not is_list and _has_split_transform(transforms):
-        raise ExtractError(f"{path}.transform: split requires list:true for scalar fields.")
+        raise ExtractError(f"{path}.transform: split requires type:'array<...>'.")
+
+    # Numeric / boolean coercion is driven by declared `type`, so we don't need
+    # to model conversion as a transform step.
 
     if is_list:
         values: list[Any] = []
@@ -232,14 +270,38 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
             raw = extractor(node)
             transformed = _apply_transforms(raw, transforms, path=transforms_path)
             if transformed is None or transformed == "" or transformed == []:
-                continue
+                if default_value is not _MISSING and not isinstance(default_value, list):
+                    transformed = default_value
+                else:
+                    continue
             if isinstance(transformed, list):
                 for item in transformed:
-                    if _is_empty(item):
+                    coerced = _coerce_scalar_type(item, declared_type=array_items_type, path=f"{path}")
+                    if array_items_type == "string" and should_strip_strings and isinstance(coerced, str):
+                        coerced = coerced.strip()
+                    if _is_empty(coerced) and default_value is not _MISSING and not isinstance(default_value, list):
+                        coerced = _coerce_scalar_type(default_value, declared_type=array_items_type, path=f"{path}.defaultValue")
+                        if array_items_type == "string" and should_strip_strings and isinstance(coerced, str):
+                            coerced = coerced.strip()
+                    if _is_empty(coerced):
                         continue
-                    values.append(item)
+                    values.append(coerced)
             else:
-                values.append(transformed)
+                coerced = _coerce_scalar_type(transformed, declared_type=array_items_type, path=f"{path}")
+                if array_items_type == "string" and should_strip_strings and isinstance(coerced, str):
+                    coerced = coerced.strip()
+                if _is_empty(coerced) and default_value is not _MISSING and not isinstance(default_value, list):
+                    coerced = _coerce_scalar_type(default_value, declared_type=array_items_type, path=f"{path}.defaultValue")
+                    if array_items_type == "string" and should_strip_strings and isinstance(coerced, str):
+                        coerced = coerced.strip()
+                if _is_empty(coerced):
+                    continue
+                values.append(coerced)
+        if values == [] and isinstance(default_value, list):
+            values = [_coerce_scalar_type(v, declared_type=array_items_type, path=f"{path}.defaultValue") for v in default_value]
+            if array_items_type == "string" and should_strip_strings:
+                values = [v.strip() if isinstance(v, str) else v for v in values]
+        values = _enforce_nullable(values, nullable=nullable, path=path)
         return _enforce_required(values, bool(required), path=path)
 
     if not nodes:
@@ -247,6 +309,16 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
     else:
         raw = extractor(nodes[0])
     value = _apply_transforms(raw, transforms, path=transforms_path)
+    if _is_empty(value) and default_value is not _MISSING:
+        value = default_value
+    value = _coerce_scalar_type(value, declared_type=declared_type, path=path)
+    if declared_type == "string" and should_strip_strings and isinstance(value, str):
+        value = value.strip()
+    if _is_empty(value) and default_value is not _MISSING:
+        value = _coerce_scalar_type(default_value, declared_type=declared_type, path=path)
+        if declared_type == "string" and should_strip_strings and isinstance(value, str):
+            value = value.strip()
+    value = _enforce_nullable(value, nullable=nullable, path=path)
     return _enforce_required(value, bool(required), path=path)
 
 
@@ -292,12 +364,45 @@ def _schema_for_field(field_spec: Any, *, options: _Options, path: str) -> dict[
     if not isinstance(field_spec, Mapping):
         raise ExtractError(f"{path} must be a mapping.")
 
+    if "items" in field_spec:
+        raise ExtractError(f"{path}.items is not supported; use type:'array<...>' (e.g. array<string>, array<object>).")
+    if "list" in field_spec:
+        raise ExtractError(f"{path}.list is not supported; use type:'array<...>' (e.g. array<string>, array<object>).")
+    if "text" in field_spec:
+        raise ExtractError(f"{path}.text is not supported; text is the default scalar mode.")
+    if "html" in field_spec:
+        raise ExtractError(f"{path}.html is not supported; use attr:'innerHTML' instead.")
+
+    declared_type, array_items_type = _parse_field_type(field_spec.get("type", _MISSING), path=path)
+    if declared_type is None:
+        raise ExtractError(f"{path}.type is required.")
+    nullable = _parse_nullable(field_spec.get("nullable", _MISSING), path=path)
+    default_value = field_spec.get("defaultValue", _MISSING)
+
     required = field_spec.get("required", False)
     if "required" in field_spec and not isinstance(required, bool):
         raise ExtractError(f"{path}.required must be a boolean when provided.")
+    if nullable is True and bool(required):
+        raise ExtractError(f"{path}: nullable:true cannot be combined with required:true.")
 
-    is_list = bool(field_spec.get("list", False))
+    is_list = declared_type == "array"
+
     has_fields = "fields" in field_spec
+    if declared_type == "array" and array_items_type is None:
+        raise ExtractError(
+            f"{path}.type must include an element type, e.g. array<string>, array<integer>, array<number>, array<boolean>, array<object>."
+        )
+    if declared_type == "array" and array_items_type == "object" and not has_fields:
+        raise ExtractError(f"{path}.fields is required for type:'array<object>'.")
+    if declared_type == "array" and array_items_type in _SCALAR_TYPES and has_fields:
+        raise ExtractError(f"{path}.fields is only allowed for type:'array<object>'.")
+
+    if declared_type == "object" and not has_fields:
+        raise ExtractError(f"{path}.type is 'object' so {path}.fields is required.")
+    if declared_type in ("string", "integer", "number", "boolean") and has_fields:
+        raise ExtractError(f"{path}.fields is not allowed when {path}.type is {declared_type!r}.")
+    if declared_type == "array" and array_items_type == "object" and default_value is not _MISSING and not isinstance(default_value, list):
+        raise ExtractError(f"{path}.defaultValue must be a list for type:'array<object>'.")
     css = field_spec.get("css")
 
     if has_fields:
@@ -309,67 +414,96 @@ def _schema_for_field(field_spec: Any, *, options: _Options, path: str) -> dict[
 
         if is_list:
             if not isinstance(css, str) or not css:
-                raise ExtractError(f"{path}.css must be a non-empty string when list:true and fields is present.")
+                raise ExtractError(f"{path}.css must be a non-empty string for type:'array<object>'.")
             arr_schema: dict[str, Any] = {"type": "array", "items": obj_schema}
             if required:
                 arr_schema["minItems"] = 1
+            if nullable is True:
+                arr_schema["type"] = ["array", "null"]
+            if default_value is not _MISSING and isinstance(default_value, list):
+                arr_schema["default"] = default_value
             return arr_schema
 
         if css is None:
             # Object scoped to current context: never null in successful extraction.
+            if nullable is True:
+                out = _schema_nullable(obj_schema, "object")
+                if default_value is not _MISSING and isinstance(default_value, Mapping):
+                    out["default"] = default_value
+                return out
+            if default_value is not _MISSING and isinstance(default_value, Mapping):
+                out = dict(obj_schema)
+                out["default"] = default_value
+                return out
             return obj_schema
 
         if not isinstance(css, str) or not css:
             raise ExtractError(f"{path}.css must be a non-empty string when provided.")
 
-        if required:
-            return obj_schema
+        if required or nullable is False:
+            out = dict(obj_schema)
+            if default_value is not _MISSING and isinstance(default_value, Mapping):
+                out["default"] = default_value
+            return out
 
-        return {"type": ["object", "null"], **obj_schema}
+        out = _schema_nullable(obj_schema, "object")
+        if default_value is not _MISSING and isinstance(default_value, Mapping):
+            out["default"] = default_value
+        return out
 
     # Scalar field
     if not isinstance(css, str) or not css:
         raise ExtractError(f"{path}.css is required for scalar fields.")
 
-    mode = _scalar_mode(field_spec, path=path)
-    transforms = _effective_transforms(field_spec, options=options, mode=mode)
+    transforms = _effective_transforms(field_spec)
     _apply_transforms("x", transforms, path=f"{path}.transform")  # validate
     if not is_list and _has_split_transform(transforms):
-        raise ExtractError(f"{path}.transform: split requires list:true for scalar fields.")
+        raise ExtractError(f"{path}.transform: split requires type:'array<...>'.")
 
-    scalar_kind, returns_list = _infer_scalar_kind(transforms)
-    base: dict[str, Any] = {"type": scalar_kind}
+    # Numeric / boolean coercion is driven by declared `type`.
 
     if is_list:
+        base: dict[str, Any] = {"type": array_items_type}
+        if default_value is not _MISSING and not isinstance(default_value, list):
+            base["default"] = default_value
+
         arr_schema = {"type": "array", "items": base}
         if required:
             arr_schema["minItems"] = 1
+        if nullable is True:
+            arr_schema["type"] = ["array", "null"]
+        if default_value is not _MISSING and isinstance(default_value, list):
+            arr_schema["default"] = default_value
         return arr_schema
 
-    if returns_list:
-        raise ExtractError(f"{path}.transform: split requires list:true for scalar fields.")
+    base = {"type": declared_type}
+    if default_value is not _MISSING:
+        base["default"] = default_value
 
     if required:
-        if scalar_kind == "string":
+        if declared_type == "string":
             return {"type": "string", "minLength": 1}
         return base
 
-    return {"type": [scalar_kind, "null"]}
+    if nullable is False:
+        return base
+    out: dict[str, Any] = {"type": [declared_type, "null"]}
+    if default_value is not _MISSING:
+        out["default"] = default_value
+    return out
 
 
-def _effective_transforms(field_spec: Mapping[str, Any], *, options: _Options, mode: str) -> list[Any]:
+def _effective_transforms(field_spec: Mapping[str, Any]) -> list[Any]:
     if "transform" in field_spec:
         transforms = field_spec.get("transform", [])
         return [] if transforms is None else transforms
-    if mode == "text" and options.default_text_transform:
-        return options.default_text_transform
     return []
 
 
 def _has_split_transform(transforms: Any) -> bool:
     if transforms in (None, []):
         return False
-    if not isinstance(transforms, list):
+    if not isinstance(transforms, (list, tuple)):
         return False
     for step in transforms:
         if isinstance(step, Mapping) and len(step) == 1 and "split" in step:
@@ -377,43 +511,112 @@ def _has_split_transform(transforms: Any) -> bool:
     return False
 
 
-def _infer_scalar_kind(transforms: list[Any]) -> tuple[str, bool]:
-    kind = "string"
-    returns_list = False
-    for step in transforms:
-        if step == "to_int":
-            kind = "integer"
-        elif step == "to_float":
-            kind = "number"
-        elif isinstance(step, Mapping) and len(step) == 1:
-            (name, _cfg), = step.items()
-            if name == "split":
-                returns_list = True
-            elif name == "to_int":
-                kind = "integer"
-            elif name == "to_float":
-                kind = "number"
-    return kind, returns_list
+def _parse_field_type(value: Any, *, path: str) -> tuple[str | None, str | None]:
+    if value is _MISSING:
+        return None, None
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        raise ExtractError(f"{path}.type must be a string when provided.")
+
+    value = value.strip()
+    if value == "array":
+        raise ExtractError(
+            f"{path}.type for arrays must include an element type, e.g. array<string>, array<integer>, array<number>, array<boolean>, array<object>."
+        )
+
+    m = re.fullmatch(r"array<\s*(string|integer|number|boolean|object)\s*>", value)
+    if m:
+        return "array", m.group(1)
+
+    if value not in (_SCALAR_TYPES | {"object"}):
+        allowed_list = ", ".join(sorted(_SCALAR_TYPES | {"object"}))
+        raise ExtractError(
+            f"{path}.type must be one of: {allowed_list}, array<string>, array<integer>, array<number>, array<boolean>, array<object>."
+        )
+    return value, None
+
+
+def _parse_nullable(value: Any, *, path: str) -> bool | None:
+    if value is _MISSING:
+        return None
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ExtractError(f"{path}.nullable must be a boolean when provided.")
+    return value
+
+
+def _schema_nullable(schema: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    out = dict(schema)
+    out["type"] = [kind, "null"]
+    return out
+
+
+def _enforce_nullable(value: Any, *, nullable: bool | None, path: str) -> Any:
+    if nullable is False and value is None:
+        raise ValidationError(f"{path} cannot be null.")
+    return value
+
+
+def _coerce_scalar_type(value: Any, *, declared_type: str | None, path: str) -> Any:
+    if declared_type is None:
+        return value
+    if value is None:
+        return None
+
+    if declared_type == "string":
+        return str(value)
+
+    if declared_type == "integer":
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value) if value.is_integer() else None
+        return _safe_int(str(value))
+
+    if declared_type == "number":
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        return _safe_float(str(value))
+
+    if declared_type == "boolean":
+        return _coerce_boolean(value)
+
+    return value
+
+
+def _coerce_boolean(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+        return None
+
+    s = str(value).strip().lower()
+    if s == "":
+        return None
+    if s in {"true", "t", "yes", "y", "on", "1"}:
+        return True
+    if s in {"false", "f", "no", "n", "off", "0"}:
+        return False
+    return None
 
 
 def _scalar_mode(field_spec: Mapping[str, Any], path: str) -> str:
-    text = field_spec.get("text", _MISSING)
     attr = field_spec.get("attr", _MISSING)
-    html = field_spec.get("html", _MISSING)
-
-    modes: list[str] = []
-    if text is not _MISSING and bool(text):
-        modes.append("text")
     if attr is not _MISSING:
-        modes.append("attr")
-    if html is not _MISSING and bool(html):
-        modes.append("html")
-
-    if not modes:
-        return "text"
-    if len(modes) > 1:
-        raise ExtractError(f"{path}: choose only one of text/attr/html (or omit to default text).")
-    return modes[0]
+        return "attr"
+    return "text"
 
 
 def _build_scalar_extractor(field_spec: Mapping[str, Any], path: str):
@@ -421,12 +624,12 @@ def _build_scalar_extractor(field_spec: Mapping[str, Any], path: str):
 
     if mode == "text":
         return _node_text
-    if mode == "html":
-        return _node_outer_html
     if mode == "attr":
         attr = field_spec.get("attr", _MISSING)
         if not isinstance(attr, str) or not attr:
             raise ExtractError(f"{path}.attr must be a non-empty string.")
+        if attr == "innerHTML":
+            return _node_html_content
         return lambda node: _node_attr(node, attr)
 
     raise ExtractError(f"{path}: unsupported extractor mode {mode!r}.")
@@ -439,8 +642,16 @@ def _node_text(node: Any) -> str | None:
     return str(val)
 
 
-def _node_outer_html(node: Any) -> str | None:
+def _node_html_content(node: Any) -> str | None:
     val = getattr(node, "html_content", None)
+    if val is None:
+        # Fallbacks for similar node implementations.
+        val = getattr(node, "html", None)
+        if callable(val):
+            try:
+                val = val()
+            except TypeError:
+                val = None
     if val is None:
         return None
     return str(val)
@@ -482,11 +693,12 @@ def _apply_transform_step(value: Any, step: Any, path: str) -> Any:
 
     if isinstance(step, str):
         if step == "strip":
-            return _map_str(value, str.strip)
-        if step == "to_int":
-            return _map_str(value, _safe_int)
-        if step == "to_float":
-            return _map_str(value, _safe_float)
+            raise ExtractError(f"{path}: 'strip' is implicit and not supported in transforms.")
+        if step in {"to_int", "to_float"}:
+            raise ExtractError(
+                f"{path}: {step!r} is no longer supported; set the field type instead "
+                f"(type:'integer' / type:'number' / type:'array<integer>' / type:'array<number>')."
+            )
         raise ExtractError(f"{path}: unknown transform {step!r}.")
 
     if not isinstance(step, Mapping) or len(step) != 1:
@@ -494,9 +706,7 @@ def _apply_transform_step(value: Any, step: Any, path: str) -> Any:
 
     (name, cfg), = step.items()
     if name == "strip":
-        if cfg not in (True, None, {}):
-            raise ExtractError(f"{path}.strip must be true.")
-        return _map_str(value, str.strip)
+        raise ExtractError(f"{path}.strip is implicit and not supported in transforms.")
 
     if name == "regex_sub":
         if not isinstance(cfg, Mapping):
@@ -516,17 +726,21 @@ def _apply_transform_step(value: Any, step: Any, path: str) -> Any:
         return _split_value(value, cfg)
 
     if name == "to_int":
-        if cfg not in (True, None, {}):
-            raise ExtractError(f"{path}.to_int must be true.")
-        return _map_str(value, _safe_int)
+        raise ExtractError(
+            f"{path}.to_int is no longer supported; set the field type instead "
+            f"(type:'integer' / type:'array<integer>')."
+        )
 
     if name == "to_float":
-        if cfg not in (True, None, {}):
-            raise ExtractError(f"{path}.to_float must be true.")
-        return _map_str(value, _safe_float)
+        raise ExtractError(
+            f"{path}.to_float is no longer supported; set the field type instead "
+            f"(type:'number' / type:'array<number>')."
+        )
 
     if name == "default":
-        return cfg if _is_empty(value) else value
+        raise ExtractError(
+            f"{path}.default is not supported; use field-level defaultValue instead."
+        )
 
     raise ExtractError(f"{path}: unknown transform {name!r}.")
 

@@ -26,7 +26,17 @@ def test_scalar_requires_css():
     spec = """
 fields:
   x:
-    text: true
+    type: "string"
+"""
+    with pytest.raises(ExtractError):
+        extract_from_yaml(HTML, spec)
+
+
+def test_type_is_required():
+    spec = """
+fields:
+  x:
+    css: "a"
 """
     with pytest.raises(ExtractError):
         extract_from_yaml(HTML, spec)
@@ -36,9 +46,9 @@ def test_list_of_objects_requires_css():
     spec = """
 fields:
   items:
-    list: true
+    type: "array<object>"
     fields:
-      x: { css: "a", text: true }
+      x: { css: "a", type: "string" }
 """
     with pytest.raises(ExtractError):
         extract_from_yaml(HTML, spec)
@@ -49,6 +59,7 @@ def test_attr_must_be_string():
 fields:
   x:
     css: "a"
+    type: "string"
     attr: 123
 """
     with pytest.raises(ExtractError):
@@ -61,18 +72,30 @@ options:
   clear:
     remove_tags: "style"
 fields:
-  x: { css: "a", text: true }
+  x: { css: "a", type: "string" }
 """
     with pytest.raises(ExtractError):
         extract_from_yaml(HTML, spec)
 
 
-def test_multiple_extractor_modes_rejected():
+def test_text_key_is_rejected():
     spec = """
 fields:
   x:
     css: "a"
+    type: "string"
     text: true
+"""
+    with pytest.raises(ExtractError):
+        extract_from_yaml(HTML, spec)
+
+
+def test_html_key_is_rejected():
+    spec = """
+fields:
+  x:
+    css: "a"
+    type: "string"
     html: true
 """
     with pytest.raises(ExtractError):
@@ -84,7 +107,7 @@ def test_required_must_be_boolean_when_provided():
 fields:
   x:
     css: "a"
-    text: true
+    type: "string"
     required: "yes"
 """
     with pytest.raises(ExtractError):
@@ -96,7 +119,7 @@ def test_required_scalar_missing_raises_validation_error():
 fields:
   title:
     css: "h1"
-    text: true
+    type: "string"
     required: true
 """
     with pytest.raises(ValidationError):
@@ -108,10 +131,10 @@ def test_required_list_of_objects_missing_raises_validation_error():
 fields:
   items:
     css: ".item"
-    list: true
+    type: "array<object>"
     required: true
     fields:
-      href: { css: "a", attr: "href" }
+      href: { css: "a", type: "string", attr: "href" }
 """
     with pytest.raises(ValidationError):
         extract_from_yaml(HTML, spec)
@@ -122,7 +145,7 @@ def test_required_list_of_scalars_missing_raises_validation_error():
 fields:
   hrefs:
     css: ".missing"
-    list: true
+    type: "array<string>"
     required: true
     attr: "href"
 """
@@ -139,28 +162,27 @@ meta:
 fields:
   title:
     css: "h1"
+    type: "string"
     _comment: "should be ignored by extractor"
-    text: true
-    transform: ["strip"]
 """
     assert extract_from_yaml(html, spec) == {"title": "Hello"}
 
 
-def test_split_requires_list_true():
+def test_split_requires_array_type():
     spec = """
 fields:
   cats:
     css: "#product"
+    type: "string"
     attr: "data-cats"
     transform:
       - split: ","
-      - strip: true
 """
     with pytest.raises(ExtractError):
         extract_from_yaml("<div id='product' data-cats='a,b'></div>", spec)
 
 
-def test_options_defaults_text_transform_strip_applies_to_text_fields():
+def test_options_defaults_is_rejected():
     html = "<h1>  Hello \n</h1>"
     spec = """
 options:
@@ -169,48 +191,7 @@ options:
 fields:
   title:
     css: "h1"
-    text: true
+    type: "string"
 """
-    assert extract_from_yaml(html, spec) == {"title": "Hello"}
-
-
-def test_options_defaults_text_transform_does_not_override_explicit_transform():
-    html = "<h1>  Hello \n</h1>"
-    spec = """
-options:
-  defaults:
-    text_transform: ["strip"]
-fields:
-  title:
-    css: "h1"
-    text: true
-    transform: []
-"""
-    assert extract_from_yaml(html, spec) == {"title": "  Hello \n"}
-
-
-def test_options_defaults_text_transform_applies_to_implicit_text_mode():
-    html = "<h1>  Hello \n</h1>"
-    spec = """
-options:
-  defaults:
-    text_transform: ["strip"]
-fields:
-  title:
-    css: "h1"
-"""
-    assert extract_from_yaml(html, spec) == {"title": "Hello"}
-
-
-def test_options_defaults_text_transform_does_not_apply_to_attr_mode():
-    html = "<a href='  x '></a>"
-    spec = """
-options:
-  defaults:
-    text_transform: ["strip"]
-fields:
-  href:
-    css: "a"
-    attr: "href"
-"""
-    assert extract_from_yaml(html, spec) == {"href": "  x "}
+    with pytest.raises(ExtractError):
+        extract_from_yaml(html, spec)

@@ -7,19 +7,18 @@ def test_schema_has_expected_top_level_shape() -> None:
     s = schema_from_yaml(
         """
 options:
-  defaults:
-    text_transform: ["strip"]
 fields:
   title:
     css: "h1"
+    type: "string"
     required: true
   hrefs:
     css: "a"
-    list: true
+    type: "array<string>"
     attr: "href"
   price:
     css: ".price"
-    transform: ["strip", "to_float"]
+    type: "number"
 """,
         title="Example",
     )
@@ -46,13 +45,12 @@ def test_schema_required_list_enforces_min_items() -> None:
 fields:
   items:
     css: ".item"
-    list: true
+    type: "array<object>"
     required: true
     fields:
-      name: { css: ".name", text: true }
+      name: { css: ".name", type: "string" }
 """,
     )
     assert s["properties"]["items"]["type"] == "array"
     assert s["properties"]["items"]["minItems"] == 1
     assert s["properties"]["items"]["items"]["type"] == "object"
-

@@ -26,12 +26,12 @@ HTML = """
 """.strip()
 
 
-def test_scalar_text_default_and_strip_transform():
+def test_scalar_text_default_strips_automatically():
     spec = """
 fields:
   title:
     css: "h1"
-    transform: ["strip"]
+    type: "string"
 """
     data = extract_from_yaml(HTML, spec)
     assert data["title"] == "Hello"
@@ -42,7 +42,7 @@ def test_scalar_attr_list():
 fields:
   hrefs:
     css: "a"
-    list: true
+    type: "array<string>"
     attr: "href"
 """
     data = extract_from_yaml(HTML, spec)
@@ -54,7 +54,8 @@ def test_scalar_outer_html():
 fields:
   first_item:
     css: ".item"
-    html: true
+    type: "string"
+    attr: "innerHTML"
 """
     data = extract_from_yaml(HTML, spec)
     html = data["first_item"]
@@ -70,18 +71,22 @@ def test_object_scope_and_missing_object_is_null():
 fields:
   product:
     css: "#product"
+    type: "object"
     fields:
       sku:
         css: "SELF"
+        type: "string"
         attr: "data-sku"
       buy:
         css: "a.buy"
+        type: "string"
         attr: "href"
 
   missing:
     css: "#does-not-exist"
+    type: "object"
     fields:
-      x: { css: "a", text: true }
+      x: { css: "a", type: "string" }
 """
     data = extract_from_yaml(HTML, spec)
     assert data["product"]["sku"] == "ABC-123"
@@ -94,10 +99,10 @@ def test_list_of_objects():
 fields:
   items:
     css: ".item"
-    list: true
+    type: "array<object>"
     fields:
-      name: { css: ".name", text: true, transform: ["strip"] }
-      url: { css: "a", attr: "href" }
+      name: { css: ".name", type: "string" }
+      url: { css: "a", type: "string", attr: "href" }
 """
     data = extract_from_yaml(HTML, spec)
     assert data["items"] == [
@@ -106,27 +111,26 @@ fields:
     ]
 
 
-def test_transforms_regex_sub_to_float_split_default():
+def test_transforms_regex_sub_number_split_and_default_value():
     spec = """
 fields:
   price:
     css: "#product .price"
+    type: "number"
     transform:
       - regex_sub: { pattern: "[^0-9.]", repl: "" }
-      - to_float: true
 
   cats:
     css: "#product"
-    list: true
+    type: "array<string>"
     attr: "data-cats"
     transform:
       - split: ","
-      - strip: true
 
   missing_with_default:
     css: ".nope"
-    transform:
-      - default: "N/A"
+    type: "string"
+    defaultValue: "N/A"
 """
     data = extract_from_yaml(HTML, spec)
     assert data["price"] == 12.34
@@ -139,11 +143,10 @@ def test_list_scalar_flattens_when_transform_produces_list():
 fields:
   cats_flat:
     css: "#product"
-    list: true
+    type: "array<string>"
     attr: "data-cats"
     transform:
       - split: ","
-      - strip: true
 """
     data = extract_from_yaml(HTML, spec)
     assert data["cats_flat"] == ["a", "b", "c"]
@@ -155,12 +158,10 @@ def test_list_scalar_drops_empty_items_when_transform_produces_list():
 fields:
   nums:
     css: "#x"
-    list: true
+    type: "array<integer>"
     attr: "data-nums"
     transform:
       - split: ","
-      - strip: true
-      - to_int: true
 """
     data = extract_from_yaml(html, spec)
     assert data["nums"] == [1, 2]
@@ -174,10 +175,11 @@ options:
 fields:
   style_html:
     css: "style"
-    html: true
+    type: "string"
+    attr: "innerHTML"
   noscript_text:
     css: "noscript"
-    text: true
+    type: "string"
 """
     data = extract_from_yaml(HTML, spec)
     assert data["style_html"] is None
@@ -189,6 +191,7 @@ def test_invalid_field_modes_raise():
 fields:
   bad:
     css: "a"
+    type: "string"
     attr: "href"
     html: true
 """

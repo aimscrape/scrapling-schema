@@ -5,27 +5,24 @@ options:
 fields:
   products:
     css: ".product"
-    list: true
+    type: "array<object>"
     fields:
       sku:
         css: "SELF"
+        type: "string"
         attr: "data-sku"
       name:
         css: ".name"
-        text: true
-        transform: ["strip"]
+        type: "string"
       url:
         css: "a.link"
+        type: "string"
         attr: "href"
       price:
         css: ".price"
-        text: true
+        type: "number"
         transform:
           - regex_sub: { pattern: "[^0-9.]+", repl: "" }
-          - to_float
       tags:
         css: ".tags li"
-        list: true
-        text: true
-        transform: ["strip"]
-
+        type: "array<string>"
