@@ -6,6 +6,16 @@
 
 ### Fixed
 
+### Removed
+
+## [1.1.1] - 2026-03-05
+
+### Added
+
+### Changed
+
+### Fixed
+
 - Scalar text extraction now includes element tail text (text after child elements), matching DOM `textContent` / jQuery `.text()` semantics more closely.
 - Added `attr: "ownText"` to extract only the current node's direct text (excluding descendant text).
 
