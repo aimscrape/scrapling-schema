@@ -44,6 +44,39 @@ result = spec.extract(html)
 json_schema = spec.json_schema(title="Products")
 ```
 
+### Boolean fields (`type: "boolean"`)
+
+Boolean output is derived from `type`, not a transform. The extractor coerces common truthy/falsey values:
+- truthy: `"true"`, `"t"`, `"yes"`, `"y"`, `"on"`, `"1"` (case-insensitive, surrounding whitespace ignored)
+- falsey: `"false"`, `"f"`, `"no"`, `"n"`, `"off"`, `"0"`
+- numbers: `1` → `True`, `0` → `False` (other numbers become `None`)
+
+Python example:
+
+```python
+from scrapling_schema import Schema, Field
+
+html = "<span class='in-stock'> yes </span>"
+spec = Schema(fields={"in_stock": Field(css=".in-stock", type="boolean")})
+
+data = spec.extract(html)
+assert data["in_stock"] is True
+```
+
+If you want invalid/missing values to fail fast, set `nullable=False`:
+
+```python
+from scrapling_schema import Schema, Field, ValidationError
+
+html = "<span class='in-stock'> maybe </span>"
+spec = Schema(fields={"in_stock": Field(css=".in-stock", type="boolean", nullable=False)})
+
+try:
+    spec.extract(html)
+except ValidationError:
+    pass
+```
+
 ### YAML spec
 
 ```yaml
@@ -68,6 +101,9 @@ fields:
         type: "number"
         transform:
           - regex_sub: { pattern: "[^0-9.]+", repl: "" }
+  in_stock:
+    css: ".in-stock"
+    type: "boolean"
 ```
 
 ```python
