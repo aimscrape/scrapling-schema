@@ -2,6 +2,16 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [1.1.3] - 2026-03-05
+
+### Added
+
 - Field-level `outputSchema` override to keep generated JSON Schema in sync when `callback` changes the output type/shape.
 
 ### Changed
