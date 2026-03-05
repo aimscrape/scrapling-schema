@@ -2,6 +2,16 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [1.1.2] - 2026-03-05
+
+### Added
+
 - Field-level `callback` hook (typed schema via `Field(callback=...)` and raw spec via `callback: ...`) to post-process the extracted field value.
 
 ### Changed
