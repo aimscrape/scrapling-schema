@@ -2,6 +2,8 @@
 
 ### Added
 
+- Field-level `outputSchema` override to keep generated JSON Schema in sync when `callback` changes the output type/shape.
+
 ### Changed
 
 ### Fixed

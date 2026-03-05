@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +115,8 @@ class Field:
     transform: list[TransformStep] | None = None
     # whole-field hook
     callback: Callable[[Any], Any] | None = None
+    # optional JSON Schema override for *output* (useful when callback changes type/shape)
+    outputSchema: Mapping[str, Any] | None = None
     # validation
     required: bool = False
 
@@ -135,6 +137,8 @@ class Field:
             out["transform"] = _serialize_transform(self.transform)
         if self.callback is not None:
             out["callback"] = {"__callable__": self.callback}
+        if self.outputSchema is not None:
+            out["outputSchema"] = dict(self.outputSchema)
         if self.required:
             out["required"] = True
         return out

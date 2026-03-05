@@ -131,6 +131,7 @@ scrapling-schema --spec spec.yml --schema
 | `fields`    | `dict` | Nested fields (for `object` / `array<object>`)               |
 | `transform` | `list` | Transform pipeline (see below)                               |
 | `callback`  | `callable` | Field-level post-processing hook (Python API only)       |
+| `outputSchema` | `dict` | Override JSON Schema for this field (useful when `callback` changes the output type/shape) |
 | `required`  | `bool` | Raise `ValidationError` if value is empty                    |
 
 Notes:
@@ -190,6 +191,12 @@ data = spec.extract(html)
 - `object` field → the whole dict
 
 This is a better fit for list-level operations or aggregations.
+
+#### When `callback` changes the output type/shape
+
+`callback` is an arbitrary Python function, so the library cannot reliably infer a JSON Schema for its return value.
+If your callback changes the type/shape (e.g., list → object, object → string), set `outputSchema` on the field to
+keep `spec.json_schema()` in sync with the actual output.
 
 Example: filter a list of objects (keep only items you care about):
 

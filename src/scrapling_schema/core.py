@@ -449,10 +449,42 @@ def _schema_for_fields(
 
 
 def _schema_for_field(
-    field_spec: Any, *, options: _Options, path: str
+    field_spec: Any,
+    *,
+    options: _Options,
+    path: str,
+    _ignore_output_schema: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(field_spec, Mapping):
         raise ExtractError(f"{path} must be a mapping.")
+
+    output_schema = field_spec.get("outputSchema", _MISSING)
+    if (
+        not _ignore_output_schema
+        and output_schema is not _MISSING
+        and output_schema is not None
+    ):
+        if not isinstance(output_schema, Mapping):
+            raise ExtractError(f"{path}.outputSchema must be a mapping when provided.")
+
+        # Validate the extraction spec (type/css/fields/etc.) even when overriding output schema.
+        _schema_for_field(
+            field_spec,
+            options=options,
+            path=path,
+            _ignore_output_schema=True,
+        )
+
+        out = dict(output_schema)
+
+        # Keep "required" semantics (non-empty strings / non-empty arrays) consistent (best-effort).
+        required = field_spec.get("required", False)
+        if "required" in field_spec and not isinstance(required, bool):
+            raise ExtractError(f"{path}.required must be a boolean when provided.")
+        if bool(required):
+            out = _schema_apply_required_constraints(out)
+
+        return out
 
     declared_type, array_items_type = _parse_field_type(
         field_spec.get("type", _MISSING), path=path
@@ -586,6 +618,24 @@ def _schema_for_field(
     out: dict[str, Any] = {"type": [declared_type, "null"]}
     if default_value is not _MISSING:
         out["default"] = default_value
+    return out
+
+
+def _schema_apply_required_constraints(schema: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(schema)
+    t = out.get("type")
+
+    types: set[str] = set()
+    if isinstance(t, str):
+        types.add(t)
+    elif isinstance(t, list):
+        types |= {x for x in t if isinstance(x, str)}
+
+    if "string" in types and "minLength" not in out:
+        out["minLength"] = 1
+    if "array" in types and "minItems" not in out:
+        out["minItems"] = 1
+
     return out
 
 
