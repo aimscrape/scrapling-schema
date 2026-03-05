@@ -99,6 +99,9 @@ scrapling-schema --spec spec.yml --schema
 Notes:
 - `type` is required for every field.
 - Arrays must use `type: "array<...>"` (no `items:` and no `list:`).
+- `attr` supports special values:
+  - `"innerHTML"`: extract HTML string from the selected node.
+  - `"ownText"`: extract direct text for the selected node (excludes descendant text).
 
 ## Transform reference
 

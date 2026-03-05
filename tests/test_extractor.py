@@ -37,6 +37,56 @@ fields:
     assert data["title"] == "Hello"
 
 
+def test_scalar_text_includes_descendants_like_jquery_text():
+    html = """
+<div id="description">
+  <span>Description ...</span>
+</div>
+""".strip()
+    spec = """
+fields:
+  description:
+    css: "#description"
+    type: "string"
+"""
+    data = extract_from_yaml(html, spec)
+    assert data["description"] == "Description ..."
+
+
+def test_scalar_attr_own_text_excludes_descendants_and_none_when_empty():
+    html = """
+<div id="description">
+  <span>Description ...</span>
+</div>
+""".strip()
+    spec = """
+fields:
+  description:
+    css: "#description"
+    type: "string"
+    attr: "ownText"
+"""
+    data = extract_from_yaml(html, spec)
+    assert data["description"] is None
+
+
+def test_scalar_attr_own_text_returns_direct_text_nodes_only():
+    html = """<div id="description">Prefix<span>Child</span>Suffix</div>"""
+    spec = """
+fields:
+  all_text:
+    css: "#description"
+    type: "string"
+  own_text:
+    css: "#description"
+    type: "string"
+    attr: "ownText"
+"""
+    data = extract_from_yaml(html, spec)
+    assert data["all_text"] == "PrefixChildSuffix"
+    assert data["own_text"] == "PrefixSuffix"
+
+
 def test_scalar_attr_list():
     spec = """
 fields:

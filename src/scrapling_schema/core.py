@@ -630,16 +630,127 @@ def _build_scalar_extractor(field_spec: Mapping[str, Any], path: str):
             raise ExtractError(f"{path}.attr must be a non-empty string.")
         if attr == "innerHTML":
             return _node_html_content
+        if attr == "ownText":
+            return _node_own_text
         return lambda node: _node_attr(node, attr)
 
     raise ExtractError(f"{path}: unsupported extractor mode {mode!r}.")
 
 
 def _node_text(node: Any) -> str | None:
-    val = getattr(node, "text", None)
-    if val is None:
+    if node is None:
         return None
-    return str(val)
+
+    # scrapling.parser.Selector exposes the underlying lxml element on `._root`.
+    # Use it to approximate DOM `textContent` semantics, including descendant text
+    # *and* tails (text after child elements).
+    root = getattr(node, "_root", None)
+    if root is not None:
+        if isinstance(root, str):
+            return root
+
+        ignore_tags = {"script", "style"}
+        ignored_elements: set[Any] = set()
+        try:
+            for element in root.iter(*ignore_tags):
+                for ignored in element.iter():
+                    ignored_elements.add(ignored)
+        except TypeError:
+            ignored_elements = set()
+
+        parts: list[str] = []
+        try:
+            for el in root.iter():
+                tag = getattr(el, "tag", None)
+                if el not in ignored_elements:
+                    text = getattr(el, "text", None)
+                    if text and isinstance(text, str):
+                        parts.append(text)
+
+                tail = getattr(el, "tail", None)
+                if tail and isinstance(tail, str):
+                    if el not in ignored_elements or tag in ignore_tags:
+                        parts.append(tail)
+        except TypeError:
+            parts = []
+
+        if parts:
+            return "".join(parts)
+
+    # scrapling.parser.Selector: `.text` is *direct* text only; use `.get_all_text()`
+    # as a best-effort fallback.
+    get_all_text = getattr(node, "get_all_text", None)
+    if callable(get_all_text):
+        try:
+            val = get_all_text()
+        except TypeError:
+            val = None
+        if val is not None:
+            return str(val)
+
+    # lxml-ish APIs often expose `.text_content()`.
+    text_content = getattr(node, "text_content", None)
+    if callable(text_content):
+        try:
+            val = text_content()
+        except TypeError:
+            val = None
+        if val is not None:
+            return str(val)
+
+    # Fallback to direct `.text` attribute or method.
+    text = getattr(node, "text", None)
+    if callable(text):
+        try:
+            val = text()
+        except TypeError:
+            val = None
+        if val is not None:
+            return str(val)
+
+    if text is None:
+        return None
+    return str(text)
+
+
+def _node_own_text(node: Any) -> str | None:
+    """
+    Direct text for the current node (does not include descendant text).
+
+    This is closer to "own text" / "direct text node" semantics than jQuery's
+    `$(el).text()` / DOM `textContent`, which include descendant text.
+    """
+    if node is None:
+        return None
+
+    root = getattr(node, "_root", None)
+    if root is not None:
+        parts: list[str] = []
+        text = getattr(root, "text", None)
+        if text:
+            parts.append(str(text))
+        try:
+            children = list(root)
+        except TypeError:
+            children = []
+        for child in children:
+            tail = getattr(child, "tail", None)
+            if tail:
+                parts.append(str(tail))
+
+        out = "".join(parts)
+        return None if out.strip() == "" else out
+
+    text = getattr(node, "text", None)
+    if callable(text):
+        try:
+            text = text()
+        except TypeError:
+            text = None
+    if text is None:
+        return None
+    out = str(text)
+    return None if out.strip() == "" else out
 
 
 def _node_html_content(node: Any) -> str | None:
