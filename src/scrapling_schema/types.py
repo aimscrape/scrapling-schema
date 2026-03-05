@@ -15,6 +15,7 @@ Instead of writing raw YAML/dicts, define your spec with full IDE type hints:
 
     result = spec.extract(html)
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -25,6 +26,7 @@ from typing import Any, Literal
 # ---------------------------------------------------------------------------
 # Transforms
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class RegexSub:
@@ -62,6 +64,7 @@ def _serialize_transform(steps: list[TransformStep]) -> list[Any]:
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Clear:
@@ -110,6 +113,8 @@ class Field:
     fields: dict[str, "Field"] | None = None
     # transforms
     transform: list[TransformStep] | None = None
+    # whole-field hook
+    callback: Callable[[Any], Any] | None = None
     # validation
     required: bool = False
 
@@ -128,6 +133,8 @@ class Field:
             out["fields"] = {k: v.to_dict() for k, v in self.fields.items()}
         if self.transform is not None:
             out["transform"] = _serialize_transform(self.transform)
+        if self.callback is not None:
+            out["callback"] = {"__callable__": self.callback}
         if self.required:
             out["required"] = True
         return out
@@ -136,6 +143,7 @@ class Field:
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Schema:
@@ -151,8 +159,10 @@ class Schema:
 
     def extract(self, html: str) -> Any:
         from .core import extract as _extract
+
         return _extract(html, self.to_dict())
 
     def json_schema(self, *, title: str | None = None) -> dict[str, Any]:
         from .core import schema as _schema
+
         return _schema(self.to_dict(), title=title)

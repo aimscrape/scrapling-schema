@@ -2,9 +2,16 @@
 
 ### Added
 
+- Field-level `callback` hook (typed schema via `Field(callback=...)` and raw spec via `callback: ...`) to post-process the extracted field value.
+
 ### Changed
 
+- Object and `array<object>` fields now support `transform` (applied after nested field extraction).
+
 ### Fixed
+
+- `callback` validation now raises an `ExtractError` when a non-callable value is provided (instead of silently ignoring it).
+- Fixed object extraction with `css` selectors and scalar extraction when no nodes match (avoid unbound local errors).
 
 ### Removed
 

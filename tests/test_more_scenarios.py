@@ -183,7 +183,7 @@ fields:
     assert excinfo.type.__name__ == "ValidationError"
 
 
-def test_list_key_is_rejected():
+def test_list_key_is_ignored():
     spec = """
 fields:
   titles:
@@ -191,8 +191,9 @@ fields:
     list: true
     type: "string"
 """
-    with pytest.raises(ExtractError):
-        extract_from_yaml(HTML, spec)
+    data = extract_from_yaml(HTML, spec)
+    # `list: true` is ignored; list mode is controlled by `type: "array<...>"`.
+    assert data["titles"] == "Title A"
 
 
 def test_type_dict_requires_fields():

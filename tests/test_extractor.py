@@ -236,7 +236,7 @@ fields:
     assert data["noscript_text"] is None
 
 
-def test_invalid_field_modes_raise():
+def test_html_key_is_ignored():
     spec = """
 fields:
   bad:
@@ -245,5 +245,5 @@ fields:
     attr: "href"
     html: true
 """
-    with pytest.raises(ExtractError):
-        extract_from_yaml(HTML, spec)
+    data = extract_from_yaml(HTML, spec)
+    assert data["bad"] == "/buy"

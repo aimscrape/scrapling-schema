@@ -77,8 +77,7 @@ fields:
     with pytest.raises(ExtractError):
         extract_from_yaml(HTML, spec)
 
-
-def test_text_key_is_rejected():
+def test_text_key_is_ignored():
     spec = """
 fields:
   x:
@@ -86,11 +85,10 @@ fields:
     type: "string"
     text: true
 """
-    with pytest.raises(ExtractError):
-        extract_from_yaml(HTML, spec)
+    assert extract_from_yaml(HTML, spec) == {"x": "x"}
 
 
-def test_html_key_is_rejected():
+def test_html_key_is_ignored():
     spec = """
 fields:
   x:
@@ -98,8 +96,7 @@ fields:
     type: "string"
     html: true
 """
-    with pytest.raises(ExtractError):
-        extract_from_yaml(HTML, spec)
+    assert extract_from_yaml(HTML, spec) == {"x": "x"}
 
 
 def test_required_must_be_boolean_when_provided():

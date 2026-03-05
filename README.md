@@ -94,6 +94,7 @@ scrapling-schema --spec spec.yml --schema
 | `defaultValue` | `any` | Fallback value used when the extracted value is empty        |
 | `fields`    | `dict` | Nested fields (for `object` / `array<object>`)               |
 | `transform` | `list` | Transform pipeline (see below)                               |
+| `callback`  | `callable` | Field-level post-processing hook (Python API only)       |
 | `required`  | `bool` | Raise `ValidationError` if value is empty                    |
 
 Notes:
@@ -113,6 +114,98 @@ Notes:
 Notes:
 - String outputs are stripped automatically (no transform needed).
 - Use field-level `defaultValue` for fallbacks (defaults are not supported inside transforms).
+
+## When to use `transform` vs `callback`
+
+Both are meant for post-processing, but they work at different levels and have different ergonomics.
+
+### Use `transform` for value-centric pipelines
+
+Good fit when you want a predictable, reusable pipeline on a single extracted value (e.g., regex cleanup, split).
+
+Order of operations (scalar fields):
+1. Extract raw string
+2. Apply `transform` pipeline
+3. Apply `type` coercion (`number`/`integer`/`boolean`)
+4. Apply `callback` (if any)
+
+Example: remove currency symbols before coercing to `number`:
+
+```python
+from scrapling_schema import Schema, Field, RegexSub
+
+spec = Schema(
+    fields={
+        "price": Field(
+            css=".price",
+            type="number",
+            transform=[RegexSub(pattern=r"[^0-9.]+", repl="")],
+        )
+    }
+)
+data = spec.extract(html)
+```
+
+### Use `callback` for whole-field logic (filtering, sorting, aggregation)
+
+`callback` receives the final extracted value for the field:
+- scalar field → the scalar value (`str|int|float|bool|None`)
+- `array<...>` field → the whole list
+- `object` field → the whole dict
+
+This is a better fit for list-level operations or aggregations.
+
+Example: filter a list of objects (keep only items you care about):
+
+```python
+from scrapling_schema.types import Schema, Field
+
+def keep_only_a(items: list[dict]) -> list[dict]:
+    return [item for item in items if "A" in item["name"]]
+
+spec = Schema(
+    fields={
+        "products": Field(
+            css=".item",
+            type="array<object>",
+            callback=keep_only_a,
+            fields={
+                "name": Field(css=".name", type="string"),
+            },
+        )
+    }
+)
+data = spec.extract(html)
+```
+
+### `array<object>` special case: `transform` is per-item
+
+For `type: "array<object>"`, `transform` is applied to each extracted object (each list element).
+If a transform returns `None`, the item is dropped from the list.
+
+```python
+from scrapling_schema import extract
+
+def drop_product_a(item: dict) -> dict | None:
+    return None if item.get("name") == "Product A" else item
+
+spec = {
+    "fields": {
+        "products": {
+            "css": ".item",
+            "type": "array<object>",
+            "transform": [drop_product_a],
+            "fields": {"name": {"css": ".name", "type": "string"}},
+        }
+    }
+}
+data = extract(html, spec)
+```
+
+### YAML note
+
+YAML specs support only the built-in transform steps (e.g., `regex_sub`, `split`).
+Python callables (`transform: [my_fn]` / `callback: my_fn`) are only supported via the Python API (typed `Schema/Field` or a Python `dict` spec), not via YAML text.
 
 ## Testing
 
