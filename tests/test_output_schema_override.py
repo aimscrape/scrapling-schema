@@ -12,7 +12,7 @@ def test_output_schema_override_is_used_for_json_schema() -> None:
             "summary": Field(
                 css=".item",
                 type="array<string>",
-                callback=summarize,
+                postprocess=summarize,
                 outputSchema={
                     "type": "object",
                     "additionalProperties": False,
@@ -36,7 +36,7 @@ def test_output_schema_override_still_applies_required_best_effort() -> None:
                 css="a",
                 type="string",
                 required=True,
-                callback=lambda _: ["a"],
+                postprocess=lambda _: ["a"],
                 outputSchema={"type": "array", "items": {"type": "string"}},
             )
         }
@@ -60,4 +60,3 @@ def test_output_schema_override_does_not_skip_spec_validation() -> None:
                 }
             }
         )
-

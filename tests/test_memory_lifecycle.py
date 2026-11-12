@@ -179,7 +179,8 @@ def test_retained_validation_errors_release_dom_without_cyclic_gc(field) -> None
 @pytest.mark.skipif(
     sys.implementation.name != "cpython", reason="Checks reference-counted cleanup."
 )
-@pytest.mark.parametrize("hook", ["callback", "transform"])
+@pytest.mark.filterwarnings("ignore:.*callback is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("hook", ["postprocess", "callback", "transform"])
 def test_chained_hook_errors_release_dom_and_preserve_user_frame(hook: str) -> None:
     marker = object()
 
@@ -225,7 +226,9 @@ def test_chained_hook_errors_release_dom_and_preserve_user_frame(hook: str) -> N
     sys.implementation.name != "cpython", reason="Checks reference-counted cleanup."
 )
 @pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
-def test_hook_error_identity_and_cyclic_cause_are_preserved(error_type) -> None:
+@pytest.mark.filterwarnings("ignore:.*callback is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("hook", ["postprocess", "callback"])
+def test_hook_error_identity_and_cyclic_cause_are_preserved(error_type, hook) -> None:
     error = error_type("stop extraction")
     error.__cause__ = error
 
@@ -239,7 +242,7 @@ def test_hook_error_identity_and_cyclic_cause_are_preserved(error_type) -> None:
                 "<div>text</div>",
                 {
                     "fields": {
-                        "value": {"css": "div", "type": "string", "callback": fail}
+                        "value": {"css": "div", "type": "string", hook: fail}
                     }
                 },
             )
@@ -304,7 +307,8 @@ def test_invalid_css_error_releases_dom() -> None:
 @pytest.mark.skipif(
     sys.implementation.name != "cpython", reason="Checks reference-counted cleanup."
 )
-@pytest.mark.parametrize("hook", ["callback", "transform"])
+@pytest.mark.filterwarnings("ignore:.*callback is deprecated:DeprecationWarning")
+@pytest.mark.parametrize("hook", ["postprocess", "callback", "transform"])
 @pytest.mark.parametrize("error_source", ["nested-extraction", "hook-local"])
 @pytest.mark.parametrize(
     "shape",

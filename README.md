@@ -130,8 +130,9 @@ scrapling-schema --spec spec.yml --schema
 | `defaultValue` | `any` | Fallback value used when the extracted value is empty        |
 | `fields`    | `dict` | Nested fields (for `object` / `array<object>`)               |
 | `transform` | `list` | Transform pipeline (see below)                               |
-| `callback`  | `callable` | Field-level post-processing hook (Python API only)       |
-| `outputSchema` | `dict` | Override JSON Schema for this field (useful when `callback` changes the output type/shape) |
+| `postprocess` | `callable` | Receives the field's fully extracted value and returns its output value (Python API only) |
+| `callback` | `callable` | Deprecated compatibility alias for `postprocess`; emits `DeprecationWarning` |
+| `outputSchema` | `dict` | Override JSON Schema for this field (useful when `postprocess` changes the output type/shape) |
 | `required`  | `bool` | Raise `ValidationError` if value is empty                    |
 
 Notes:
@@ -152,7 +153,7 @@ Notes:
 - String outputs are stripped automatically (no transform needed).
 - Use field-level `defaultValue` for fallbacks (defaults are not supported inside transforms).
 
-## When to use `transform` vs `callback`
+## When to use `transform` vs `postprocess`
 
 Both are meant for post-processing, but they work at different levels and have different ergonomics.
 
@@ -164,7 +165,8 @@ Order of operations (scalar fields):
 1. Extract raw string
 2. Apply `transform` pipeline
 3. Apply `type` coercion (`number`/`integer`/`boolean`)
-4. Apply `callback` (if any)
+4. Apply `postprocess` (if any)
+5. Check `required`
 
 Example: remove currency symbols before coercing to `number`:
 
@@ -183,19 +185,31 @@ spec = Schema(
 data = spec.extract(html)
 ```
 
-### Use `callback` for whole-field logic (filtering, sorting, aggregation)
+### Use `postprocess` for whole-field logic (filtering, sorting, aggregation)
 
-`callback` receives the final extracted value for the field:
+`postprocess` receives the fully extracted value for the field and returns its output value:
 - scalar field → the scalar value (`str|int|float|bool|None`)
 - `array<...>` field → the whole list
 - `object` field → the whole dict
 
 This is a better fit for list-level operations or aggregations.
 
-#### When `callback` changes the output type/shape
+`callback` remains available as a deprecated compatibility alias with the same behavior.
+Using it during extraction or JSON Schema generation emits a `DeprecationWarning`
+that points to the calling code and recommends `postprocess`. It will be removed in
+a future version; no removal version has been scheduled. Replace `callback=my_fn`
+with `postprocess=my_fn` in typed fields, or rename the key in Python dict specs.
 
-`callback` is an arbitrary Python function, so the library cannot reliably infer a JSON Schema for its return value.
-If your callback changes the type/shape (e.g., list → object, object → string), set `outputSchema` on the field to
+Do not set both names to non-`None` values on the same field: extraction and JSON
+Schema generation raise `ExtractError`. `None` disables the corresponding hook.
+
+Python normally hides library deprecation warnings. Run `python -Wd your_script.py`
+to display them, or configure your test runner to treat deprecation warnings as errors.
+
+#### When `postprocess` changes the output type/shape
+
+`postprocess` is an arbitrary Python function, so the library cannot reliably infer a JSON Schema for its return value.
+If your function changes the type/shape (e.g., list → object, object → string), set `outputSchema` on the field to
 keep `spec.json_schema()` in sync with the actual output.
 
 Example: filter a list of objects (keep only items you care about):
@@ -211,7 +225,7 @@ spec = Schema(
         "products": Field(
             css=".item",
             type="array<object>",
-            callback=keep_only_a,
+            postprocess=keep_only_a,
             fields={
                 "name": Field(css=".name", type="string"),
             },
@@ -248,7 +262,7 @@ data = extract(html, spec)
 ### YAML note
 
 YAML specs support only the built-in transform steps (e.g., `regex_sub`, `split`).
-Python callables (`transform: [my_fn]` / `callback: my_fn`) are only supported via the Python API (typed `Schema/Field` or a Python `dict` spec), not via YAML text.
+Python callables (`transform: [my_fn]` / `postprocess: my_fn`, including the deprecated `callback` alias) are only supported via the Python API (typed `Schema/Field` or a Python `dict` spec), not via YAML text.
 
 ## Memory lifetime
 
@@ -262,15 +276,15 @@ to plain Python strings before transforms run. Keeping these transform inputs
 does not keep the source DOM alive.
 
 Field evaluation releases its DOM references on both normal return and failure.
-This also covers callbacks and transforms that catch an error, retain the
+This also covers postprocessors and transforms that catch an error, retain the
 exception, and return successfully.
 
 When `extract()` raises, it clears finished traceback frames belonging to this
 library and Scrapling's parser to release DOM references and temporary values.
 All extraction entry points drop their own HTML input references when they finish.
-Exception identity, messages, traceback locations, and user callback locals are
+Exception identity, messages, traceback locations, and user hook locals are
 preserved. Locals from cleared library/parser frames are therefore unavailable
-when inspecting saved tracebacks. Callers and callbacks can still retain their
+when inspecting saved tracebacks. Callers and hooks can still retain their
 own inputs or values.
 
 ## Testing
