@@ -2,6 +2,16 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [1.2.0] - 2026-11-12
+
+### Added
+
 - Add `postprocess` for whole-field post-processing in typed and dict specs.
 
 ### Changed
