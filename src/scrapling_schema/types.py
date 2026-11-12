@@ -18,10 +18,9 @@ Instead of writing raw YAML/dicts, define your spec with full IDE type hints:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
-
+from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
 # Transforms
@@ -110,7 +109,7 @@ class Field:
     # extraction mode
     attr: str | None = None
     # nested
-    fields: dict[str, "Field"] | None = None
+    fields: dict[str, Field] | None = None
     # transforms
     transform: list[TransformStep] | None = None
     # whole-field hook
@@ -164,7 +163,10 @@ class Schema:
     def extract(self, html: str) -> Any:
         from .core import extract as _extract
 
-        return _extract(html, self.to_dict())
+        try:
+            return _extract(html, self.to_dict())
+        finally:
+            del html
 
     def json_schema(self, *, title: str | None = None) -> dict[str, Any]:
         from .core import schema as _schema

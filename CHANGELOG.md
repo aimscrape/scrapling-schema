@@ -8,6 +8,34 @@
 
 ### Removed
 
+## [1.1.4] - 2026-11-12
+
+### Added
+
+- Memory lifecycle regression coverage for retained exceptions, recovered hooks,
+  nested object arrays, and all four extraction entry points.
+- Shared VS Code interpreter, Pylance, and Ruff development settings.
+
+### Changed
+
+- Release preprocessed HTML and Scrapling's raw-body cache after parsing by
+  reusing the existing DOM for field extraction.
+- Clear finished internal and Scrapling parser traceback locals on failure while
+  preserving exception identity, traceback locations, and user callback locals.
+
+### Fixed
+
+- Release DOM references on both successful and failed extraction, including
+  callbacks and transforms that catch and retain an exception.
+- Release DOM references held by invalid CSS selector exceptions and avoid
+  retaining object-array nodes through comprehension frames on older Python.
+- Convert text and attribute pseudo-element results to plain strings before
+  transforms so retained values do not keep the source document alive.
+- Reject invalid top-level fields before parsing HTML and release input references
+  from every extraction entry point.
+
+### Removed
+
 ## [1.1.3] - 2026-03-05
 
 ### Added
