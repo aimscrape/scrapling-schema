@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import inspect
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
@@ -277,13 +279,14 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
             )
 
         transforms = field_spec.get("transform", [])
-        callback = field_spec.get("callback")
+        postprocess, postprocess_name = _resolve_postprocess(field_spec, path=path)
+        postprocess_path = f"{path}.{postprocess_name}"
 
         css = field_spec.get("css")
         if css is None and context is None:
             value = [] if is_list else None
             value = _enforce_nullable(value, nullable=nullable, path=path)
-            value = _apply_callback(value, callback, path=path)
+            value = _apply_postprocess(value, postprocess, path=postprocess_path)
             return _enforce_required(value, bool(required), path=path)
 
         if has_fields:
@@ -309,7 +312,7 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
                 if value == [] and isinstance(default_value, list):
                     value = list(default_value)
                 value = _enforce_nullable(value, nullable=nullable, path=path)
-                value = _apply_callback(value, callback, path=path)
+                value = _apply_postprocess(value, postprocess, path=postprocess_path)
                 return _enforce_required(value, bool(required), path=path)
 
             if css is None:
@@ -321,7 +324,7 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
                 if value is None and default_value is not _MISSING:
                     value = default_value
                 value = _enforce_nullable(value, nullable=nullable, path=path)
-                value = _apply_callback(value, callback, path=path)
+                value = _apply_postprocess(value, postprocess, path=postprocess_path)
                 return _enforce_required(value, bool(required), path=path)
 
             if not isinstance(css, str) or not css:
@@ -333,7 +336,7 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
                 value = _enforce_nullable(None, nullable=nullable, path=path)
                 if value is None and default_value is not _MISSING:
                     value = default_value
-                value = _apply_callback(value, callback, path=path)
+                value = _apply_postprocess(value, postprocess, path=postprocess_path)
                 return _enforce_required(value, bool(required), path=path)
             value = _eval_fields(nodes[0], fields, options=options)
             if transforms:
@@ -341,7 +344,7 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
             if value is None and default_value is not _MISSING:
                 value = default_value
             value = _enforce_nullable(value, nullable=nullable, path=path)
-            value = _apply_callback(value, callback, path=path)
+            value = _apply_postprocess(value, postprocess, path=postprocess_path)
             return _enforce_required(value, bool(required), path=path)
 
         # Scalar extraction
@@ -450,7 +453,7 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
                 if array_items_type == "string" and should_strip_strings:
                     values = [v.strip() if isinstance(v, str) else v for v in values]
             values = _enforce_nullable(values, nullable=nullable, path=path)
-            values = _apply_callback(values, callback, path=path)
+            values = _apply_postprocess(values, postprocess, path=postprocess_path)
             return _enforce_required(values, bool(required), path=path)
 
         raw = None
@@ -477,7 +480,7 @@ def _eval_field(context: Any, field_spec: Any, path: str, options: _Options) -> 
             ):
                 value = value.strip()
         value = _enforce_nullable(value, nullable=nullable, path=path)
-        value = _apply_callback(value, callback, path=path)
+        value = _apply_postprocess(value, postprocess, path=postprocess_path)
         return _enforce_required(value, bool(required), path=path)
     finally:
         # Release DOM references even if a hook handles and saves an error.
@@ -563,6 +566,8 @@ def _schema_for_field(
             out = _schema_apply_required_constraints(out)
 
         return out
+
+    _resolve_postprocess(field_spec, path=path)
 
     declared_type, array_items_type = _parse_field_type(
         field_spec.get("type", _MISSING), path=path
@@ -1020,17 +1025,49 @@ def _apply_transforms(value: Any, transforms: Any, path: str) -> Any:
     return current
 
 
-def _apply_callback(value: Any, callback: Any, *, path: str) -> Any:
-    if callback is None:
+def _resolve_postprocess(
+    field_spec: Mapping[str, Any], *, path: str
+) -> tuple[Any, str]:
+    postprocess = field_spec.get("postprocess")
+    callback = field_spec.get("callback")
+    if postprocess is not None and callback is not None:
+        raise ExtractError(
+            f"{path}: postprocess and callback cannot be used together."
+        )
+    if callback is not None:
+        _warn_callback_deprecated(path)
+        return callback, "callback"
+    return postprocess, "postprocess"
+
+
+def _warn_callback_deprecated(path: str) -> None:
+    # Skip typed wrappers and nested field evaluation so warnings point to callers.
+    frame = inspect.currentframe()
+    stacklevel = 1
+    try:
+        while frame is not None and frame.f_globals.get("__name__", "").startswith(
+            "scrapling_schema."
+        ):
+            frame = frame.f_back
+            stacklevel += 1
+    finally:
+        del frame
+    warnings.warn(
+        f"{path}.callback is deprecated and will be removed in a future version; "
+        "use postprocess instead.",
+        DeprecationWarning,
+        stacklevel=stacklevel,
+    )
+
+
+def _apply_postprocess(value: Any, postprocess: Any, *, path: str) -> Any:
+    if postprocess is None:
         return value
-    if isinstance(callback, Mapping) and "__callable__" in callback:
-        cb = callback["__callable__"]
-        if not callable(cb):
-            raise ExtractError(f"{path}.callback must be callable.")
-        return cb(value)
-    if callable(callback):
-        return callback(value)
-    raise ExtractError(f"{path}.callback must be callable.")
+    if isinstance(postprocess, Mapping) and "__callable__" in postprocess:
+        postprocess = postprocess["__callable__"]
+    if callable(postprocess):
+        return postprocess(value)
+    raise ExtractError(f"{path} must be callable.")
 
 
 def _apply_transform_step(value: Any, step: Any, path: str) -> Any:

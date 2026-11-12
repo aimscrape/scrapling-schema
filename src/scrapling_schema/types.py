@@ -112,9 +112,11 @@ class Field:
     fields: dict[str, Field] | None = None
     # transforms
     transform: list[TransformStep] | None = None
-    # whole-field hook
+    # whole-field post-processing; keyword-only to preserve positional arguments
+    postprocess: Callable[[Any], Any] | None = field(default=None, kw_only=True)
+    # deprecated compatibility alias for postprocess
     callback: Callable[[Any], Any] | None = None
-    # optional JSON Schema override for *output* (useful when callback changes type/shape)
+    # optional JSON Schema override when postprocess changes the output type/shape
     outputSchema: Mapping[str, Any] | None = None
     # validation
     required: bool = False
@@ -134,6 +136,8 @@ class Field:
             out["fields"] = {k: v.to_dict() for k, v in self.fields.items()}
         if self.transform is not None:
             out["transform"] = _serialize_transform(self.transform)
+        if self.postprocess is not None:
+            out["postprocess"] = {"__callable__": self.postprocess}
         if self.callback is not None:
             out["callback"] = {"__callable__": self.callback}
         if self.outputSchema is not None:

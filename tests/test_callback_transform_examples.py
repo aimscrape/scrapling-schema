@@ -1,5 +1,6 @@
 import pytest
-from scrapling_schema import extract_from_yaml
+
+from scrapling_schema import Field, Schema, extract
 
 HTML = """
 <ul>
@@ -29,20 +30,16 @@ def test_transform_on_array_object():
         }
     }
 
-    from scrapling_schema import core
-
-    data = core.extract(HTML, spec)
+    data = extract(HTML, spec)
 
     print(f"Result (transform): {data['products']}")
     assert len(data["products"]) == 1
     assert data["products"][0]["name"] == "Product B"
 
 
-def test_callback_on_array_object():
-    from scrapling_schema.types import Schema, Field
-
-    # List-level callback
-    def my_callback(items):
+def test_postprocess_on_array_object():
+    # List-level post-processing
+    def keep_only_a(items):
         # Filtering the entire list
         return [item for item in items if "A" in item["name"]]
 
@@ -51,7 +48,7 @@ def test_callback_on_array_object():
             "products": Field(
                 css=".item",
                 type="array<object>",
-                callback=my_callback,
+                postprocess=keep_only_a,
                 fields={
                     "name": Field(css=".name", type="string"),
                 },
@@ -60,23 +57,23 @@ def test_callback_on_array_object():
     )
 
     data = spec.extract(HTML)
-    print(f"Result (callback): {data['products']}")
+    print(f"Result (postprocess): {data['products']}")
     assert len(data["products"]) == 1
     assert data["products"][0]["name"] == "Product A"
 
 
-def test_callback_on_scalar():
-    from scrapling_schema.types import Schema, Field
-
+def test_postprocess_on_scalar():
     def upper_name(name):
         return name.upper()
 
     spec = Schema(
-        fields={"product_name": Field(css=".name", type="string", callback=upper_name)}
+        fields={
+            "product_name": Field(css=".name", type="string", postprocess=upper_name)
+        }
     )
 
     data = spec.extract(HTML)
-    print(f"Result (scalar callback): {data['product_name']}")
+    print(f"Result (scalar postprocess): {data['product_name']}")
     assert data["product_name"] == "PRODUCT A"
 
 
