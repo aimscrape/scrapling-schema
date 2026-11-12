@@ -49,7 +49,9 @@ htmlcov/
 
 # IDEs / editors
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 
 # OS files
 .DS_Store

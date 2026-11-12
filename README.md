@@ -250,6 +250,29 @@ data = extract(html, spec)
 YAML specs support only the built-in transform steps (e.g., `regex_sub`, `split`).
 Python callables (`transform: [my_fn]` / `callback: my_fn`) are only supported via the Python API (typed `Schema/Field` or a Python `dict` spec), not via YAML text.
 
+## Memory lifetime
+
+The parser and DOM are local to each extraction. Once parsing finishes,
+`extract()` releases its references to the preprocessed HTML before fields are
+evaluated. Extraction uses a Selector around the existing DOM, allowing the
+original Selector's raw-body cache to be released without reparsing the document.
+
+Text and attribute pseudo-element results are converted from lxml smart strings
+to plain Python strings before transforms run. Keeping these transform inputs
+does not keep the source DOM alive.
+
+Field evaluation releases its DOM references on both normal return and failure.
+This also covers callbacks and transforms that catch an error, retain the
+exception, and return successfully.
+
+When `extract()` raises, it clears finished traceback frames belonging to this
+library and Scrapling's parser to release DOM references and temporary values.
+All extraction entry points drop their own HTML input references when they finish.
+Exception identity, messages, traceback locations, and user callback locals are
+preserved. Locals from cleared library/parser frames are therefore unavailable
+when inspecting saved tracebacks. Callers and callbacks can still retain their
+own inputs or values.
+
 ## Testing
 
 Install the dev dependencies (in a virtualenv) and run the test suite:
